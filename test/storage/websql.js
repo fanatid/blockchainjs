@@ -1,10 +1,12 @@
-'use strict'
+import { randomBytes as getRandomBytes } from 'crypto'
 
-require('./implementation')({
+import runImplementationTest from './implementation'
+
+runImplementationTest({
   describe: describe,
   clsName: 'WebSQL',
   clsOpts: {
-    dbName: require('crypto').randomBytes(10).toString('hex')
+    dbName: getRandomBytes(10).toString('hex')
   },
   skipFullMode: false
 })

@@ -7,7 +7,7 @@ var io = require('socket.io-client')
 // var request = Promise.promisify(require('request'))
 var getUnspents = Promise.promisify(require('helloblock-faucet').getUnspents)
 
-var blockchainjs = require('../')
+var blockchainjs = require('../src')
 var errors = blockchainjs.errors
 
 /**
@@ -94,5 +94,6 @@ function ignoreConnectorErrors (err) {
 module.exports = {
   createTx: createTx,
   getUnconfirmedTxId: getUnconfirmedTxId,
-  ignoreConnectorErrors: ignoreConnectorErrors
+  ignoreConnectorErrors: ignoreConnectorErrors,
+  ZERO_HASH: new Array(65).join('0')
 }

@@ -74,7 +74,6 @@ new Promise(function (resolve) { connector.once('connect', resolve) })
         bar.tick()
         return util.hashEncode(util.sha256x2(rawChunk))
       })
-
   }, {concurrency: 3})
   .finally(function () {
     connector.disconnect()

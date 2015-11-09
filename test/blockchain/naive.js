@@ -5,11 +5,11 @@ var expect = require('chai').expect
 var bitcoin = require('bitcoinjs-lib')
 var Promise = require('bluebird')
 
-var blockchainjs = require('../../')
+var blockchainjs = require('../../src')
 var helpers = require('../helpers')
 var fixtures = require('../fixtures/connector.json')
 
-describe('blockchain.Naive', function () {
+describe.skip('blockchain.Naive', function () {
   this.timeout(30000)
 
   var connector
@@ -45,16 +45,16 @@ describe('blockchain.Naive', function () {
     connector.disconnect()
   })
 
-  it('inherits Blockchain', function () {
+  it.skip('inherits Blockchain', function () {
     expect(blockchain).to.be.instanceof(blockchainjs.blockchain.Blockchain)
     expect(blockchain).to.be.instanceof(blockchainjs.blockchain.Naive)
   })
 
-  it('connector property', function () {
+  it.skip('connector property', function () {
     expect(blockchain.connector).to.equal(connector)
   })
 
-  it('latest', function (done) {
+  it.skip('latest', function (done) {
     var expected = {hash: blockchainjs.util.ZERO_HASH, height: -1}
     expect(blockchain.latest).to.deep.equal(expected)
     blockchain.once('newBlock', function () {
@@ -63,7 +63,7 @@ describe('blockchain.Naive', function () {
     })
   })
 
-  it('getHeader 0 by height', function (done) {
+  it.skip('getHeader 0 by height', function (done) {
     blockchain.getHeader(fixtures.headers[0].height)
       .then(function (header) {
         expect(header).to.deep.equal(fixtures.headers[0])
@@ -71,7 +71,7 @@ describe('blockchain.Naive', function () {
       .done(done, done)
   })
 
-  it('getHeader 30000 by id', function (done) {
+  it.skip('getHeader 30000 by id', function (done) {
     blockchain.getHeader(fixtures.headers[30000].hash)
       .then(function (header) {
         expect(header).to.deep.equal(fixtures.headers[30000])
@@ -79,7 +79,7 @@ describe('blockchain.Naive', function () {
       .done(done, done)
   })
 
-  it('getHeader (not-exists -- wrong height)', function (done) {
+  it.skip('getHeader (not-exists -- wrong height)', function (done) {
     blockchain.getHeader(987654)
       .asCallback(function (err) {
         expect(err).to.be.instanceof(blockchainjs.errors.Blockchain.HeaderNotFound)
@@ -89,7 +89,7 @@ describe('blockchain.Naive', function () {
       .done(_.noop, _.noop)
   })
 
-  it('getHeader (not-exists -- wrong blockHash)', function (done) {
+  it.skip('getHeader (not-exists -- wrong blockHash)', function (done) {
     var blockHash = '000000008c0c4d9f3f1365dc028875bebd0344307d63feae16ec2160a50dce23'
 
     blockchain.getHeader(blockHash)
@@ -101,7 +101,7 @@ describe('blockchain.Naive', function () {
       .done(_.noop, _.noop)
   })
 
-  it('getTx (confirmed tx)', function (done) {
+  it.skip('getTx (confirmed tx)', function (done) {
     var txid = '9854bf4761024a1075ebede93d968ce1ba98d240ba282fb1f0170e555d8fdbd8'
 
     blockchain.getTx(txid)
@@ -126,7 +126,7 @@ describe('blockchain.Naive', function () {
       .done(done, done)
   })
 
-  it('getTx (not-exists tx)', function (done) {
+  it.skip('getTx (not-exists tx)', function (done) {
     var txid = '74335585dadf14f35eaf34ec72a134cd22bde390134e0f92cb7326f2a336b2bb'
 
     blockchain.getTx(txid)
@@ -138,7 +138,7 @@ describe('blockchain.Naive', function () {
       .done(_.noop, _.noop)
   })
 
-  it('getTxBlockHash (confirmed tx)', function (done) {
+  it.skip('getTxBlockHash (confirmed tx)', function (done) {
     var txid = '9854bf4761024a1075ebede93d968ce1ba98d240ba282fb1f0170e555d8fdbd8'
     var expected = {
       source: 'blocks',
@@ -166,7 +166,7 @@ describe('blockchain.Naive', function () {
       .done(done, done)
   })
 
-  it('getTxBlockHash (non-exists tx)', function (done) {
+  it.skip('getTxBlockHash (non-exists tx)', function (done) {
     var txid = '74335585dadf14f35eaf34ec72a134cd22bde390134e0f92cb7326f2a336b2bb'
 
     blockchain.getTxBlockHash(txid)
@@ -186,7 +186,7 @@ describe('blockchain.Naive', function () {
       .done(done, done)
   })
 
-  it('addressesQuery (history)', function (done) {
+  it.skip('addressesQuery (history)', function (done) {
     var fixture = fixtures.history[0]
     blockchain.addressesQuery(fixture.addresses)
       .then(function (res) {

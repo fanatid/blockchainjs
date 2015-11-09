@@ -1,7 +1,3 @@
-'use strict'
-
-var errorSystem = require('error-system')
-
 /**
  * Error
  *  +-- BlockchainJS
@@ -24,7 +20,9 @@ var errorSystem = require('error-system')
  *       |    +-- RequestError
  *       |    +-- TxNotFound
  *       |    +-- TxSendError
+ *       |    +-- SubscribeError
  *       |    +-- Unreachable
+ *       |    +-- UnsubscribeError
  *       +-- NetworkNameMatchError
  *       +-- NotImplemented
  *       +-- Storage
@@ -37,7 +35,7 @@ var errorSystem = require('error-system')
  *            +-- NotAvailable
  */
 
-var spec = {
+let spec = {
   name: 'BlockchainJS',
   message: 'Internal error',
   errors: [{
@@ -99,9 +97,15 @@ var spec = {
     }, {
       name: 'TxSendError',
       message: 'Can\'t send transaction: {0}'
+    } {
+      name: 'SubscribeError',
+      message: '{0}'
     }, {
       name: 'Unreachable',
       message: 'Service {0} is unreachable.'
+    }, {
+      name: 'UnsubscribeError',
+      message: '{0}'
     }]
   }, {
     name: 'NetworkNameMatchError',
@@ -139,6 +143,5 @@ var spec = {
   }]
 }
 
-errorSystem.extend(Error, spec)
-
+require('error-system').extend(Error, spec)
 module.exports = Error.BlockchainJS

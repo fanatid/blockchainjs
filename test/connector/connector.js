@@ -1,13 +1,9 @@
-'use strict'
+import { expect } from 'chai'
+import { EventEmitter } from 'events'
 
-var _ = require('lodash')
-var expect = require('chai').expect
-var EventEmitter = require('events').EventEmitter
-var Promise = require('bluebird')
+import blockchainjs from '../../src'
 
-var blockchainjs = require('../../')
-
-var notImplementedMethods = [
+let notImplementedMethods = [
   '_doOpen',
   '_doClose',
   'getCurrentActiveRequests',
@@ -16,41 +12,33 @@ var notImplementedMethods = [
   'headersQuery',
   'getTx',
   'getTxMerkle',
+  'isOutputSpent',
   'sendTx',
   'addressesQuery',
-  'subscribe'
+  'subscribe',
+  'unsubscribe'
 ]
 
-describe('network.Connector', function () {
-  var network
+describe('network.Connector', () => {
+  let network
 
-  beforeEach(function () {
+  beforeEach(() => {
     network = new blockchainjs.connector.Connector()
   })
 
-  afterEach(function () {
-    network = null
-  })
-
-  it('inherits events.EventEmitter', function () {
+  it('inherits events.EventEmitter', () => {
     expect(network).to.be.instanceof(blockchainjs.connector.Connector)
     expect(network).to.be.instanceof(EventEmitter)
   })
 
-  it('isConnected', function () {
+  it('isConnected', () => {
     expect(network.isConnected()).to.be.false
   })
 
-  notImplementedMethods.forEach(function (method) {
-    it(method, function (done) {
-      Promise.try(function () {
-        return network[method]()
-      })
-      .asCallback(function (err) {
-        expect(err).to.be.instanceof(blockchainjs.errors.NotImplemented)
-        done()
-      })
-      .done(_.noop, _.noop)
+  notImplementedMethods.forEach((method) => {
+    it(method, () => {
+      var promise = Promise.resolve().then(() => network[method]())
+      return expect(promise).to.be.rejectedWith(blockchainjs.errors.NotImplemented)
     })
   })
 })

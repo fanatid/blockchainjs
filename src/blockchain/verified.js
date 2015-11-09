@@ -117,7 +117,6 @@ function verifyHeader (currentHash, currentHeader, hashPrevBlock, prevHeader, ta
       assert.equal(currentHeader.bits, target.bits)
       // check hash and target
       assert.equal(isGoodHash(currentHash, target.target), true)
-
     } catch (err) {
       // special case for testnet:
       // If no block has been found in 20 minutes, the difficulty automatically
@@ -420,13 +419,11 @@ Verified.prototype._sync = function (networkHash, networkHeight) {
             if (self.storage.compactMode && rawChunk.length === 2016 * 80) {
               var chunkHash = util.hashEncode(util.sha256x2(rawChunk))
               return self.storage.putChunkHashes([chunkHash])
-
             } else {
               var headers = _.range(0, rawChunk.length, 80).map(function (offset) {
                 return rawChunk.slice(offset, offset + 80).toString('hex')
               })
               return self.storage.putHeaders(headers)
-
             }
           })
           .then(function () {
@@ -557,7 +554,6 @@ Verified.prototype._sync = function (networkHash, networkHeight) {
   if (delta <= 0 || delta > 50) {
     // syncing with chunks
     syncThroughChunks()
-
   } else {
     // download all headers between blockchain height and network height
     var headers = self.connector.headersQuery(
@@ -587,7 +583,6 @@ Verified.prototype._sync = function (networkHash, networkHeight) {
     })
     .then(function () { deferred.resolve() })
     .catch(function (err) { deferred.reject(err) })
-
   }
 
   return deferred.promise

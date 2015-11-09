@@ -1,6 +1,6 @@
-'use strict'
+import runImplementationTest from './implementation'
 
-require('./implementation')({
+runImplementationTest({
   describe: describe,
   clsName: 'Chromanode',
   clsOpts: {}

@@ -9,7 +9,7 @@
  *       |    +-- VerifyChunkError
  *       |    +-- VerifyHeaderError
  *       |    +-- VerifyTxError
- *       +-- Connector
+ *       +-- Network
  *       |    +-- Chromanode
  *       |    |    +-- Error
  *       |    |    +-- Fail
@@ -64,8 +64,8 @@ let spec = {
       message: 'TxId: {0} ({1})'
     }]
   }, {
-    name: 'Connector',
-    message: 'Internal error on Connector {0}',
+    name: 'Network',
+    message: 'Internal error on Network {0}',
     errors: [{
       name: 'Chromanode',
       message: 'Internal error on Chromanode {0}',
@@ -97,7 +97,7 @@ let spec = {
     }, {
       name: 'TxSendError',
       message: 'Can\'t send transaction: {0}'
-    } {
+    }, {
       name: 'SubscribeError',
       message: '{0}'
     }, {

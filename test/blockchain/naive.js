@@ -7,7 +7,7 @@ var Promise = require('bluebird')
 
 var blockchainjs = require('../../src')
 var helpers = require('../helpers')
-var fixtures = require('../fixtures/connector.json')
+var fixtures = require('../fixtures/network.json')
 
 describe.skip('blockchain.Naive', function () {
   this.timeout(30000)

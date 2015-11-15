@@ -9,25 +9,24 @@ let notImplementedMethods = [
   'getCurrentActiveRequests',
   'getTimeFromLastResponse',
   'getHeader',
-  'headersQuery',
+  'getHeaders',
   'getTx',
   'getTxMerkle',
-  'isOutputSpent',
   'sendTx',
   'addressesQuery',
   'subscribe',
   'unsubscribe'
 ]
 
-describe('network.Connector', () => {
+describe('network.Network', () => {
   let network
 
   beforeEach(() => {
-    network = new blockchainjs.connector.Connector()
+    network = new blockchainjs.network.Network()
   })
 
   it('inherits events.EventEmitter', () => {
-    expect(network).to.be.instanceof(blockchainjs.connector.Connector)
+    expect(network).to.be.instanceof(blockchainjs.network.Network)
     expect(network).to.be.instanceof(EventEmitter)
   })
 

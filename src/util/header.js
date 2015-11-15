@@ -33,8 +33,8 @@ export function header2buffer (header) {
 export function buffer2header (buffer) {
   return {
     version: buffer.readUInt32LE(0),
-    hashPrevBlock: Array.prototype.reverse.call(buffer.slice(4, 36)).toString('hex'),
-    hashMerkleRoot: Array.prototype.reverse.call(buffer.slice(36, 68)).toString('hex'),
+    hashPrevBlock: Array.prototype.reverse.call(new Buffer(buffer.slice(4, 36))).toString('hex'),
+    hashMerkleRoot: Array.prototype.reverse.call(new Buffer(buffer.slice(36, 68))).toString('hex'),
     time: buffer.readUInt32LE(68),
     bits: buffer.readUInt32LE(72),
     nonce: buffer.readUInt32LE(76)

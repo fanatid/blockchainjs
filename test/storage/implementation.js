@@ -32,7 +32,9 @@ module.exports = (opts) => {
     })
 
     describe('compact mode', () => {
-      beforeEach(() => {
+      beforeEach(function () {
+        this.timeout(5 * 1000)
+
         let storageOpts = _.defaults({compact: true}, opts.clsOpts)
 
         storage = new StorageCls(storageOpts)
@@ -126,12 +128,12 @@ module.exports = (opts) => {
       })
     })
 
-    let fullModeDescribe = opts.skipFullMode ? xdescribe : describe
+    let ndescribe = opts.skipFullMode ? xdescribe : describe
     if (!StorageCls.isFullModeSupported()) {
-      fullModeDescribe = xdescribe
+      ndescribe = xdescribe
     }
 
-    fullModeDescribe('full mode', () => {
+    ndescribe('full mode', () => {
       beforeEach(async () => {
         let storageOpts = _.defaults({compact: false}, opts.clsOpts)
 

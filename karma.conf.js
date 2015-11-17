@@ -4,15 +4,11 @@ module.exports = function (config) {
     files: [
       'node_modules/babel-core/browser-polyfill.js',
       'test/*.js',
-      'test/storage/*.js',
-      'test/connector/*.js',
-      'test/blockchain/*.js'
+      'test/*/*.js'
     ],
     preprocessors: {
       'test/*.js': ['browserify'],
-      'test/storage/*.js': ['browserify'],
-      'test/connector/*.js': ['browserify'],
-      'test/blockchain/*.js': ['browserify']
+      'test/*/*.js': ['browserify']
     },
     singleRun: true,
     plugins: [

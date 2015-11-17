@@ -3,5 +3,5 @@ import runImplementationTest from './implementation'
 runImplementationTest({
   describe: describe,
   clsName: 'Chromanode',
-  clsOpts: {}
+  clsOpts: {url: process.env.CHROMANODE_URL}
 })

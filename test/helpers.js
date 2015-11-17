@@ -4,31 +4,23 @@ import request from 'request'
 import io from 'socket.io-client'
 
 let TEST_CHANGE = process.env.TEST_CHANGE || '2MvynpNLGuxgHSWd7EdX94ZTcZSZ5iM2Uo1'
-let BLOCKTRAIL_API_KEY = process.env.BLOCKTRAIL_API_KEY || 'cf49415da4382b2a5a03aca8e4079d02321767b3'
 
 /**
  * @return {Promise<bitcore.Transaction>}
  */
 export async function createTx () {
-  // TODO: create service with preloads
-
-  let privateKey = bitcore.PrivateKey(bitcore.Networks.testnet)
   let requestOpts = {
-    method: 'POST',
-    uri: 'https://api.blocktrail.com/v1/tBTC/faucet/withdrawl?api_key=' + BLOCKTRAIL_API_KEY,
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({
-      address: privateKey.toAddress().toString(),
-      amount: 2e4
-    })
+    method: 'GET',
+    uri: 'http://devel.hz.udoidio.info:6266/api/v1/preload?name=100k',
+    json: true,
+    zip: true
   }
 
-  let [txId, outIndex] = await new Promise((resolve, reject) => {
+  let data = await new Promise((resolve, reject) => {
     request(requestOpts, (err, response) => {
       if (err === null) {
         if (response.statusCode === 200) {
-          let obj = JSON.parse(response.body)
-          return resolve([obj.txHash, obj.index])
+          return resolve(response.body.data)
         }
 
         err = new Error(`Status code is ${response.statusCode}`)
@@ -39,14 +31,9 @@ export async function createTx () {
   })
 
   return new bitcore.Transaction()
-    .from({
-      txId: txId,
-      outputIndex: outIndex,
-      satoshis: 2e4,
-      script: bitcore.Script.buildPublicKeyHashOut(privateKey.toAddress())
-    })
-    .to(TEST_CHANGE, 1e4)
-    .sign(privateKey)
+    .from(data.unspent)
+    .change(TEST_CHANGE)
+    .sign(data.privateKeyWIF)
 }
 
 /**

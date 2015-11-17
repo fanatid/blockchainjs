@@ -20,9 +20,8 @@ module.exports = function (opts) {
   let NetworkCls = blockchainjs.network[opts.clsName]
 
   let ndescribe = opts.describe || describe
-  let clsOpts = _.extend({
-    url: process.env.CHROMANODE_URL || NetworkCls.getSources('testnet')[0]
-  }, opts.clsOpts)
+  let clsOpts = opts.clsOpts
+  clsOpts.url = clsOpts.url || NetworkCls.getSources('testnet')[0]
 
   ndescribe(opts.clsName, function () {
     this.timeout(90 * 1000)

@@ -285,8 +285,7 @@ export default class Chromanode extends Network {
         let result = await this._request('/v2/headers/latest')
         ;[height, headerHex] = [result.height, result.header]
       } else {
-        // v1 is [from, to), v2 is (from, to]
-        let result = await this._request('/v1/headers/query', {from: id, count: 1})
+        let result = await this._request('/v2/headers/query', {id: id})
         ;[height, headerHex] = [result.from, result.headers.slice(0, 160)]
       }
 
@@ -298,7 +297,7 @@ export default class Chromanode extends Network {
     } catch (err) {
       var nerr = err
       if (err instanceof errors.Network.Chromanode.Fail &&
-          err.data.type === 'FromNotFound') {
+          err.data.type === 'HeaderNotFound') {
         nerr = new errors.Network.HeaderNotFound(id)
       }
 

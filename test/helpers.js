@@ -43,6 +43,7 @@ export async function createTx () {
 async function createAndPushUnconfirmedTx (tx) {
   try {
     let tx = await createTx()
+
     await new Promise((resolve, reject) => {
       let requestOpts = {
         method: 'POST',
@@ -62,7 +63,8 @@ async function createAndPushUnconfirmedTx (tx) {
         reject(err)
       })
     })
-    console.log('Tx was pushed')
+
+    console.log(`Tx was pushed (${tx.id})`)
   } catch (err) {
     console.log(`Error on pushing tx: ${err.stack}`)
     createAndPushUnconfirmedTx()
@@ -87,7 +89,7 @@ socket.on('connect', () => {
 })
 socket.on('tx', (data) => {
   lastUnconfirmedTxIds.push({txId: data.txid, time: Date.now()})
-  console.log('Get new tx from insight!')
+  console.log(`Get new tx from insight! (${data.txid})`)
 })
 socket.on('block', () => {
   lastUnconfirmedTxIds = []

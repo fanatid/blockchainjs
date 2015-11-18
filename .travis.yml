@@ -6,7 +6,7 @@ node_js:
   - "4"
   - "5"
 before_install:
-  - "sh -e /etc/init.d/xvfb start"
+  - sh -e /etc/init.d/xvfb start
 env:
   global:
     - DISPLAY=:99.0
@@ -15,7 +15,7 @@ env:
 matrix:
   include:
     - node_js: "4"
-      env: TEST_SUITE=coverage
+      env: TEST_SUITE=coveralls
     - node_js: "4"
       env: TEST_SUITE=lint
 script: npm run $TEST_SUITE

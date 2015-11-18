@@ -12,45 +12,6 @@ import errors from '../errors'
 import { hashEncode, sha256x2 } from '../util/crypto'
 import { buffer2header } from '../util/header'
 
-function upgradeWSRequest (target, name, descriptor) {
-  let fn = descriptor.value
-
-  /**
-   * @param {Object} opts
-   * @param {string} opts.event newBlock or newTx, tx or address
-   * @param {string} [opts.address]
-   * @return {Promise}
-   */
-  descriptor.value = async function (opts) {
-    opts = _.extend({}, opts)
-
-    let wsOpts
-    let handler
-
-    switch (opts.event) {
-      case 'newBlock':
-        wsOpts = {type: 'new-block'}
-        handler = (payload) => {
-          this.emit('newBlock', payload)
-        }
-        break
-
-      case 'newTx':
-        wsOpts = {type: 'address', address: opts.address.toString()}
-        handler = (payload) => {
-          this.emit('newTx', {txId: payload.txid, address: payload.address})
-        }
-        break
-
-      default:
-        opts = null
-        break
-    }
-
-    return this._wsRequestWithLock(fn.bind(this, wsOpts, handler))
-  }
-}
-
 /**
  * [Chromanode API]{@link http://github.com/chromaway/chromanode}
  *
@@ -83,17 +44,21 @@ export default class Chromanode extends Network {
     this._requestTimeout = opts.requestTimeout
     this._requestCount = 0
     this._requestLastResponse = Date.now()
-    this._wsSubscribes = {}
     this._wsTransports = opts.wsTransports
+    this._wsBlock = false
+    this._wsAddresses = []
 
-    // re-subscribe on newBlock and touchAddress
+    // re-subscribe on newBlock and newTx
     this.on('connect', () => {
-      var optsSet = _.keys(this._wsSubscribes)
-      this._wsSubscribes = {}
-      for (let opts of optsSet) {
-        this.subscribe(JSON.parse(opts)).catch((err) => {
-          this.emit('error', err)
-        })
+      if (this._wsBlock) {
+        this._wsBlock = false
+        this.subscribe({event: 'newBlock'}).catch(this.emit.bind(this, 'error'))
+      }
+
+      if (this._wsAddresses.length > 0) {
+        let addresses = this._wsAddresses
+        this._wsAddresses = []
+        this.subscribe({event: 'newTx', addresses: addresses}).catch(this.emit.bind(this, 'error'))
       }
     })
   }
@@ -178,6 +143,11 @@ export default class Chromanode extends Network {
 
       this._deleteSocket(reason !== 'io client disconnect')
       this._setReadyState(this.READY_STATE.CLOSED)
+    })
+
+    this._socket.on('new-block', this.emit.bind(this, 'newBlock'))
+    this._socket.on('address', (payload) => {
+      this.emit('newTx', {txId: payload.txid, address: payload.address})
     })
 
     // open socket
@@ -361,10 +331,10 @@ export default class Chromanode extends Network {
     try {
       let result = await this._request('/v2/transactions/merkle', {txid: txId})
       if (result.source === 'mempool') {
-        return []
+        return null
       }
 
-      return [result.block]
+      return result.block
     } catch (err) {
       var nerr = err
       if (err instanceof errors.Network.Chromanode.Fail &&
@@ -445,28 +415,36 @@ export default class Chromanode extends Network {
   }
 
   /**
-   */
-  @makeConcurrent({concurrency: 1})
-  _wsRequestWithLock (fn) { return fn() }
-
-  /**
    * @param {Object} opts
    * @param {string} opts.event newBlock or newTx
-   * @param {string} [opts.address]
+   * @param {string[]} [opts.addresses]
    * @return {Promise}
    */
-  @upgradeWSRequest
-  async subscribe (opts, handler) {
-    if (opts === null) {
-      throw new errors.Network.SubscribeError('Wrong event type')
-    }
+  @makeConcurrent({concurrency: 1})
+  async subscribe (opts) {
+    let handler
 
-    let key = JSON.stringify(opts)
-    if (this._wsSubscribes[key] !== undefined) {
-      throw new errors.Network.SubscribeError('You already subscribe for this event')
-    }
+    switch (_.get(opts, 'event')) {
+      case 'newBlock':
+        if (this._wsBlock) {
+          return
+        }
 
-    this._wsSubscribes[key] = handler
+        opts = {type: 'new-block'}
+        break
+
+      case 'newTx':
+        let address = _.get(opts, 'address').toString()
+        if (this._wsAddresses.indexOf(address) !== -1) {
+          return
+        }
+
+        opts = {type: 'address', address: address}
+        break
+
+      default:
+        throw new errors.Network.SubscribeError('Wrong event type')
+    }
 
     if (!this.isConnected()) {
       return
@@ -504,75 +482,9 @@ export default class Chromanode extends Network {
       this.on('newReadyState', onChangeReadyState)
       this._socket.emit('subscribe', opts)
       await deferred.promise
-      this._socket.on(opts.type, handler)
     } finally {
       if (this._socket) {
         this._socket.removeListener('subscribed', onSubscribed)
-      }
-      this.removeListener('newReadyState', onChangeReadyState)
-    }
-  }
-
-  /**
-   * @param {Object} opts
-   * @param {string} opts.event newBlock or newTx
-   * @param {string} [opts.address]
-   * @return {Promise}
-   */
-  async unsubscribe (opts) {
-    if (opts === null) {
-      throw new errors.Network.UnsubscribeError('Wrong event type')
-    }
-
-    let key = JSON.stringify(opts)
-    if (this._wsSubscribes[key] === undefined) {
-      throw new errors.Network.UnsubscribeError('You not subscribe for this event')
-    }
-
-    this._socket.removeListener(opts.type, this._wsSubscribes[key])
-    delete this._wsSubscribes[key]
-
-    if (!this.isConnected()) {
-      return
-    }
-
-    let deferred = {}
-    deferred.promise = new Promise((resolve, reject) => {
-      deferred.resolve = resolve
-      deferred.reject = reject
-    })
-
-    function onUnsubscribed (payload, err) {
-      if (err === null) {
-        if (_.eq(payload, opts)) {
-          return deferred.resolve()
-        }
-
-        let msg = `Unsubscribe on wrong event (${JSON.stringify(payload)} instead ${key})`
-        err = new errors.Network.UnsubscribeError(msg)
-      }
-
-      deferred.reject(err)
-    }
-
-    function onChangeReadyState (newReadyState) {
-      if (newReadyState === this.READY_STATE.CLOSING ||
-          newReadyState === this.READY_STATE.CLOSED) {
-        let err = new errors.Network.UnsubscribeError('Connection was lost')
-        deferred.reject(err)
-      }
-    }
-
-    try {
-      this._socket.once('unsubscribed', onUnsubscribed)
-      this.on('newReadyState', onChangeReadyState)
-      this._socket.emit('unsubscribe', opts)
-      await deferred.promise
-    } catch (err) {
-      this.emit('error', err)
-    } finally {
-      if (this._socket) {
-        this._socket.removeListener('unsubscribed', onUnsubscribed)
       }
       this.removeListener('newReadyState', onChangeReadyState)
     }

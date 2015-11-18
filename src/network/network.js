@@ -103,6 +103,18 @@ export default class Network extends EventEmitter {
   }
 
   /**
+   * @return {Object}
+   */
+  get READY_STATE () {
+    return {
+      CONNECTING: 'connecting',
+      OPEN: 'open',
+      CLOSING: 'closing',
+      CLOSED: 'closed'
+    }
+  }
+
+  /**
    * @abstract
    * @private
    */
@@ -241,7 +253,7 @@ export default class Network extends EventEmitter {
   /**
    * @abstract
    * @param {string} txId
-   * @return {Promise<Network~TxMerkleObject[]>}
+   * @return {Promise<?Network~TxMerkleObject>}
    */
   async getTxMerkle () {
     throw new errors.NotImplemented(`${this.constructor.name}.getTxMerkle`)
@@ -282,30 +294,4 @@ export default class Network extends EventEmitter {
   async subscribe () {
     throw new errors.NotImplemented(`${this.constructor.name}.subscribe`)
   }
-
-  /**
-   * @abstract
-   * @param {Object} opts
-   * @param {string} opts.event newBlock or newTx
-   * @param {string} [opts.address]
-   * @return {Promise}
-   */
-  async unsubscribe () {
-    throw new errors.NotImplemented(`${this.constructor.name}.unsubscribe`)
-  }
 }
-
-/**
- * READY_STATE property
- */
-Object.defineProperty(Network.prototype, 'READY_STATE', {
-  configurable: false,
-  enumerable: true,
-  writable: false,
-  value: Object.freeze({
-    CONNECTING: 'connecting',
-    OPEN: 'open',
-    CLOSING: 'closing',
-    CLOSED: 'closed'
-  })
-})

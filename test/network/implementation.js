@@ -24,7 +24,7 @@ module.exports = function (opts) {
   clsOpts.url = clsOpts.url || NetworkCls.getSources('testnet')[0]
 
   ndescribe(opts.clsName, function () {
-    this.timeout(90 * 1000)
+    this.timeout(60 * 1000)
 
     let network
 
@@ -99,17 +99,17 @@ module.exports = function (opts) {
         .to.be.rejectedWith(blockchainjs.errors.Network.HeaderNotFound, new RegExp(hash))
     })
 
-    it('getHeader 0 by height', async () => {
+    it('getHeader (0 by height)', async () => {
       let header = await network.getHeader(fixtures.headers[0].height)
       expect(header).to.deep.equal(fixtures.headers[0])
     })
 
-    it('getHeader 0 by hash', async () => {
+    it('getHeader (0 by hash)', async () => {
       let header = await network.getHeader(fixtures.headers[0].hash)
       expect(header).to.deep.equal(fixtures.headers[0])
     })
 
-    it('getHeader 30000 by height', async () => {
+    it('getHeader (30000 by height)', async () => {
       let header = await network.getHeader(fixtures.headers[30000].height)
       expect(header).to.deep.equal(fixtures.headers[30000])
     })
@@ -183,13 +183,13 @@ module.exports = function (opts) {
     it('getTxMerkle (unconfirmed tx)', async () => {
       let txId = await getUnconfirmedTxId()
       let result = await network.getTxMerkle(txId)
-      expect(result).to.deep.equal([])
+      expect(result).to.deep.equal(null)
     })
 
     it('sendTx', async () => {
       let tx = await createTx()
       try {
-        await network.sendTx(tx.toString())
+        await network.sendTx(tx.serialize())
       } catch (err) {
         if (err instanceof blockchainjs.errors.Network.TxSendError &&
             err.message.search(/Missing inputs/) !== -1) {
@@ -224,10 +224,9 @@ module.exports = function (opts) {
       return network.subscribe({event: 'newBlock'})
     })
 
-    // fail with missing inputs ...
-    it.skip('subscribe on newTx and wait event', async () => {
-      let tx = await createTx(2e4)
-      let address = tx.outputs[0].script.toAddress(bitcore.Networks.testnet)
+    it('subscribe on newTx and wait event', async () => {
+      let tx = await createTx()
+      let address = tx.outputs[0].script.toAddress('testnet').toString()
 
       await new Promise((resolve, reject) => {
         network.on(`newTx`, (payload) => {
@@ -240,7 +239,7 @@ module.exports = function (opts) {
         })
 
         network.subscribe({event: 'newTx', address: address})
-        network.sendTx(tx.toString()).catch(reject)
+        network.sendTx(tx.serialize()).catch(reject)
       })
     })
   })

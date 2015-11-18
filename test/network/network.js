@@ -14,8 +14,7 @@ let notImplementedMethods = [
   'getTxMerkle',
   'sendTx',
   'addressesQuery',
-  'subscribe',
-  'unsubscribe'
+  'subscribe'
 ]
 
 describe('network.Network', () => {

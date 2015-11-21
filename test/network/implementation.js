@@ -1,13 +1,12 @@
 import { expect } from 'chai'
 import _ from 'lodash'
 import { randomBytes as getRandomBytes } from 'crypto'
-import bitcore from 'bitcore-lib'
 
 import blockchainjs from '../../src'
 import { hashEncode, sha256x2 } from '../../src/util/crypto'
 import { header2buffer } from '../../src/util/header'
 
-import { createTx, getUnconfirmedTxId } from '../helpers'
+import helpers from '../helpers'
 import fixtures from '../fixtures/network.json'
 
 /**
@@ -22,6 +21,7 @@ module.exports = function (opts) {
   let ndescribe = opts.describe || describe
   let clsOpts = opts.clsOpts
   clsOpts.url = clsOpts.url || NetworkCls.getSources('testnet')[0]
+  console.log(`${opts.clsName} URL is ${clsOpts.url}`)
 
   ndescribe(opts.clsName, function () {
     this.timeout(60 * 1000)
@@ -73,13 +73,8 @@ module.exports = function (opts) {
       network.disconnect()
     })
 
-    it('getCurrentActiveRequests', (done) => {
-      network.getHeader('latest')
-
-      setTimeout(() => {
-        expect(network.getCurrentActiveRequests()).to.equal(1)
-        done()
-      }, 5)
+    it('getCurrentActiveRequests', () => {
+      expect(network.getCurrentActiveRequests()).to.equal(0)
     })
 
     it('getTimeFromLastResponse', async () => {
@@ -156,7 +151,7 @@ module.exports = function (opts) {
     })
 
     it('getTx (unconfirmed tx)', async () => {
-      let txId = await getUnconfirmedTxId()
+      let txId = await helpers.getUnconfirmedTxId()
       let txHex = await network.getTx(txId)
       let responseTxId = hashEncode(sha256x2(new Buffer(txHex, 'hex')))
       expect(responseTxId).to.equal(txId)
@@ -181,23 +176,14 @@ module.exports = function (opts) {
     })
 
     it('getTxMerkle (unconfirmed tx)', async () => {
-      let txId = await getUnconfirmedTxId()
+      let txId = await helpers.getUnconfirmedTxId()
       let result = await network.getTxMerkle(txId)
       expect(result).to.deep.equal(null)
     })
 
     it('sendTx', async () => {
-      let tx = await createTx()
-      try {
-        await network.sendTx(tx.serialize())
-      } catch (err) {
-        if (err instanceof blockchainjs.errors.Network.TxSendError &&
-            err.message.search(/Missing inputs/) !== -1) {
-          return
-        }
-
-        throw err
-      }
+      let tx = await helpers.createTx()
+      return await network.sendTx(tx.serialize())
     })
 
     it('addressesQuery', async () => {
@@ -225,7 +211,7 @@ module.exports = function (opts) {
     })
 
     it('subscribe on newTx and wait event', async () => {
-      let tx = await createTx()
+      let tx = await helpers.createTx()
       let address = tx.outputs[0].script.toAddress('testnet').toString()
 
       await new Promise((resolve, reject) => {

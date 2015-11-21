@@ -1,14 +1,15 @@
 import _ from 'lodash'
+import { createHash } from 'crypto'
 import bitcore from 'bitcore-lib'
 import request from 'request'
 import io from 'socket.io-client'
 
-let TEST_CHANGE = process.env.TEST_CHANGE || '2MvynpNLGuxgHSWd7EdX94ZTcZSZ5iM2Uo1'
+const TEST_CHANGE = process.env.TEST_CHANGE || '2MvynpNLGuxgHSWd7EdX94ZTcZSZ5iM2Uo1'
 
 /**
  * @return {Promise<bitcore.Transaction>}
  */
-export async function createTx () {
+async function createTx () {
   let requestOpts = {
     method: 'GET',
     uri: 'http://devel.hz.udoidio.info:6266/api/v1/preload?name=100k',
@@ -98,13 +99,13 @@ socket.on('block', () => {
 })
 
 function lastUnconfirmedTxIdsPredicate (o) {
-  return Date.now() - o.time > 5000
+  return Date.now() - o.time > 8000
 }
 
 /**
  * @return {Promise<string>}
  */
-export async function getUnconfirmedTxId () {
+async function getUnconfirmedTxId () {
   while (!_.some(lastUnconfirmedTxIds, lastUnconfirmedTxIdsPredicate)) {
     await new Promise((resolve) => { setTimeout(resolve, 10) })
   }
@@ -112,4 +113,8 @@ export async function getUnconfirmedTxId () {
   return _.find(lastUnconfirmedTxIds, lastUnconfirmedTxIdsPredicate).txId
 }
 
-export let ZERO_HASH = new Array(65).join('0')
+export default {
+  ZERO_HASH: new Array(65).join('0'),
+  createTx: createTx,
+  getUnconfirmedTxId: getUnconfirmedTxId
+}

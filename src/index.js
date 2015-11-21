@@ -21,9 +21,8 @@ blockchainjs.chunkHashes = {}
 
 // blockchain
 blockchainjs.blockchain = {}
-// blockchainjs.blockchain.Blockchain = require('./blockchain/blockchain')
-// blockchainjs.blockchain.Naive = require('./blockchain/naive')
-// blockchainjs.blockchain.Verified = require('./blockchain/verified')
-// blockchainjs.blockchain.Snapshot = require('./blockchain/snapshot')
+blockchainjs.blockchain.Blockchain = require('./blockchain/blockchain')
+blockchainjs.blockchain.Naive = require('./blockchain/naive')
+blockchainjs.blockchain.Verified = require('./blockchain/verified')
 
 export default blockchainjs

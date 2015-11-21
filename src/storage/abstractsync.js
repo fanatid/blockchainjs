@@ -103,7 +103,7 @@ export default class AbstractBlockchainSyncStorage extends IBlockchainStorage {
   }
 
   /**
-   * @param {Array.<string>} chunkHashes
+   * @param {string[]} chunkHashes
    * @return {Promise}
    */
   async putChunkHashes (chunkHashes) {
@@ -140,10 +140,10 @@ export default class AbstractBlockchainSyncStorage extends IBlockchainStorage {
       }
 
       data = JSON.parse(data)
-      data.chunkHashes = Math.min(data.chunkHashes, limit)
+      limit = data.chunkHashes = Math.min(data.chunkHashes, limit)
       await this._storage.set('info', JSON.stringify(data))
 
-      for (let {key} of await this._storage.entries()) {
+      for (let key of await this._storage.keys()) {
         if (key.substring(0, 3) !== 'ch-') {
           continue
         }
@@ -195,7 +195,7 @@ export default class AbstractBlockchainSyncStorage extends IBlockchainStorage {
   }
 
   /**
-   * @param {Array.<string>} headers
+   * @param {string[]} headers
    * @return {Promise}
    */
   async putHeaders (headers) {
@@ -250,8 +250,8 @@ export default class AbstractBlockchainSyncStorage extends IBlockchainStorage {
       data.headers = Math.min(data.headers, limit)
       await this._storage.set('info', JSON.stringify(data))
 
-      let chunk = Math.floor(limit / 2016)
-      let shift = limit % 2016
+      let chunk = Math.floor(data.headers / 2016)
+      let shift = data.headers % 2016
 
       for (let {key, value: rawChunk} of await this._storage.entries()) {
         if (key.substring(0, 3) !== 'hc-') {

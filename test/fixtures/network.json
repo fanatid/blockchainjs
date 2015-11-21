@@ -25,7 +25,7 @@
     "confirmed": [
       {
         "txId": "10cb1f5ffa591edc7dc545c674bdfa830bbdd3555a19d4a16253b194ab0a32d3",
-        "result": [{
+        "result": {
           "height": 27774,
           "hash": "000000008408ad6e31ddc9563908d7f11ee4af1f21a35785b2b07837f33ebce4",
           "merkle": [
@@ -33,16 +33,16 @@
             "6fbf0f4971241c4f9cafd38a2764b63f410d5bfaad2ed5e2cd1184088c187d94"
           ],
           "index": 1
-        }]
+        }
       },
       {
         "txId": "8acc4825f5563dc2969b81661acc6b65f3cb0e1649a7d4ee91d4acfc613d8bf2",
-        "result": [{
+        "result": {
           "height": 5432,
           "hash": "000000002697b6db85bb0748f47212e0c1eb1f4bccfe89379b07f98033a9282f",
           "index": 0,
           "merkle": []
-        }]
+        }
       }
     ]
   },

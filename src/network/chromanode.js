@@ -58,7 +58,9 @@ export default class Chromanode extends Network {
       if (this._wsAddresses.length > 0) {
         let addresses = this._wsAddresses
         this._wsAddresses = []
-        this.subscribe({event: 'newTx', addresses: addresses}).catch(this.emit.bind(this, 'error'))
+        for (let address of addresses) {
+          this.subscribe({event: 'newTx', address: address}).catch(this.emit.bind(this, 'error'))
+        }
       }
     })
   }
@@ -325,7 +327,7 @@ export default class Chromanode extends Network {
 
   /**
    * @param {string} txId
-   * @return {Promise<Network~TxMerkleObject[]>}
+   * @return {Promise<?Network~TxMerkleObject>}
    */
   async getTxMerkle (txId) {
     try {
@@ -422,14 +424,13 @@ export default class Chromanode extends Network {
    */
   @makeConcurrent({concurrency: 1})
   async subscribe (opts) {
-    let handler
-
     switch (_.get(opts, 'event')) {
       case 'newBlock':
         if (this._wsBlock) {
           return
         }
 
+        this._wsBlock = true
         opts = {type: 'new-block'}
         break
 
@@ -439,6 +440,7 @@ export default class Chromanode extends Network {
           return
         }
 
+        this._wsAddresses.push(address)
         opts = {type: 'address', address: address}
         break
 
@@ -462,7 +464,7 @@ export default class Chromanode extends Network {
           return deferred.resolve()
         }
 
-        let msg = `Subscribe on wrong event (${JSON.stringify(payload)} instead ${key})`
+        let msg = `Subscribe on wrong event (${JSON.stringify(payload)} instead ${JSON.stringify(opts)})`
         err = new errors.Network.SubscribeError(msg)
       }
 

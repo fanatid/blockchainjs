@@ -1,146 +1,73 @@
-'use strict'
+import makeConcurrent from 'make-concurrent'
 
-var _ = require('lodash')
-var inherits = require('util').inherits
-var timers = require('timers')
-var Promise = require('bluebird')
-var makeConcurrent = require('make-concurrent')(Promise)
-
-var Blockchain = require('./blockchain')
-var errors = require('../errors')
+import Blockchain from './blockchain'
 
 /**
  * @class Naive
  * @extends Blockchain
- *
- * @param {Connector} connector
- * @param {Object} [opts]
- * @param {string} [opts.networkName=livenet]
- * @param {number} [opts.txCacheSize=100]
  */
-function Naive (connector, opts) {
-  var self = this
-  Blockchain.call(self, connector, opts)
-
-  opts = _.extend({txCacheSize: 100}, opts)
-  if (connector.networkName !== self.networkName) {
-    throw new errors.NetworkNameMatchError(
-      self.networkName, connector.networkName)
+export default class Naive extends Blockchain {
+  /*
+   * @constructor
+   * @param {Network} network
+   * @param {Object} [opts]
+   * @param {number} [opts.txCacheSize=100]
+   */
+  constructor (network, opts) {
+    super(network, opts)
+    this._networkStart()
   }
 
-  self.connector.on('newBlock', self._syncLatest.bind(self))
-  self.connector.subscribe({event: 'newBlock'})
-
-  self.connector.on('touchAddress', function (address, txid) {
-    self.emit('touchAddress', address, txid)
-  })
-
-  Promise.try(function () {
-    timers.setImmediate(function () { self._syncStart() })
-  })
-  .then(function () {
-    function onConnect () { self._syncLatest() }
-    self.connector.on('connect', onConnect)
-    if (self.connector.isConnected()) { onConnect() }
-  })
-}
-
-inherits(Naive, Blockchain)
-
-/**
- * @param {string} newHash
- * @param {number} newHeight
- * @return {Promise}
- */
-Naive.prototype._syncBlockchain = makeConcurrent(function (newHash, newHeight) {
-  var self = this
-  return Promise.try(function () {
-    self._syncStart()
-  })
-  .then(function () {
-    self._latest = {hash: newHash, height: newHeight}
-    self.emit('newBlock', newHash, newHeight)
-  })
-  .finally(function () {
-    self._syncStop()
-  })
-  .catch(function (err) {
-    self.emit('error', err)
-  })
-}, {concurrency: 1})
-
-/**
- * @param {(number|string)} id
- * @return {Promise<Connector~HeaderObject>}
- */
-Naive.prototype.getHeader = function (id) {
-  return this.connector.getHeader(id)
-    .catch(errors.Connector.HeaderNotFound, this._rethrow)
-}
-
-/**
- * @param {string} txid
- * @return {Promise<string>}
- */
-Naive.prototype.getTx = function (txid) {
-  var self = this
-
-  if (!self._txCache.has(txid) || self._txCache.get(txid).isRejected()) {
-    var promise = self.connector.getTx(txid)
-      .catch(errors.Connector.TxNotFound, self._rethrow)
-
-    self._txCache.set(txid, promise)
-  }
-
-  return self._txCache.get(txid)
-}
-
-/**
- * @param {string} txid
- * @return {Promise<Blockchain~TxBlockHashObject>}
- */
-Naive.prototype.getTxBlockHash = function (txid) {
-  return this.connector.getTxMerkle(txid)
-    .then(function (response) {
-      if (response.block !== undefined) {
-        delete response.block.index
-        delete response.block.merkle
+  /**
+   * @private
+   * @return {Promise}
+   */
+  @makeConcurrent({concurrency: 1})
+  async _sync () {
+    let savedLatest = this.latest
+    try {
+      await this._withSync(async () => {
+        this._latest = await this._network.getHeader('latest')
+      })
+    } catch (err) {
+      this.emit('error', err)
+    } finally {
+      if (this._latest.hash !== savedLatest.hash) {
+        this.emit('newBlock', this.latest) // emit with clone of _latest
       }
+    }
+  }
 
-      return response
-    })
-    .catch(errors.Connector.TxNotFound, this._rethrow)
+  /**
+   * @param {(number|string)} id
+   * @return {Promise<Network~HeaderObject>}
+   */
+  getHeader (id) {
+    return this._network.getHeader(id)
+  }
+
+  /**
+   * @param {string} txId
+   * @return {Promise<?{hash: string, height: number}>}
+   */
+  async getTxBlockInfo (txId) {
+    let obj = await this._network.getTxMerkle(txId)
+    if (obj !== null) {
+      return {hash: obj.hash, height: obj.height}
+    }
+
+    return null
+  }
+
+  /**
+   * @param {string[]} addresses
+   * @param {Object} [opts]
+   * @param {(string|number)} [opts.from]
+   * @param {(string|number)} [opts.to]
+   * @param {boolean} [opts.unspent=false]
+   * @return {Promise<Network~AddressesQueryObject>}
+   */
+  addressesQuery (addresses, opts) {
+    return this._network.addressesQuery(addresses, opts)
+  }
 }
-
-/**
- * @param {string} rawtx
- * @return {Promise<string>}
- */
-Naive.prototype.sendTx = function (rawtx) {
-  return this.connector.sendTx(rawtx)
-    .catch(errors.Connector.TxSendError, this._rethrow)
-}
-
-/**
- * @param {string[]} addresses
- * @param {Object} [opts]
- * @param {string} [opts.source] `blocks` or `mempool`
- * @param {(string|number)} [opts.from] `hash` or `height`
- * @param {(string|number)} [opts.to] `hash` or `height`
- * @param {string} [opts.status]
- * @return {Promise<Connector~AddressesQueryObject>}
- */
-Naive.prototype.addressesQuery = function (addresses, opts) {
-  return this.connector.addressesQuery(addresses, opts)
-    .catch(errors.Connector.HeaderNotFound, this._rethrow)
-}
-
-/**
- * @param {string} address
- * @return {Promise}
- */
-Naive.prototype.subscribeAddress = function (address) {
-  return this.connector.subscribe({event: 'touchAddress', address: address})
-}
-
-module.exports = Naive

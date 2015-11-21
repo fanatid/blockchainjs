@@ -24,13 +24,8 @@ import errors from '../errors'
  *   pre-saved data has next structure:
  *    {lastHash: string, chunkHashes: string[]}
  *
- * But at least you can use both options
- *   just remember, what sometimes you can't store all data that you needed
- *
  * All methods return Promise,
  *  this is done for asynchronous storages such as: SQLite, WebSQL
- *
- * Also all methods represent hashes in hex strings, not a Buffer
  */
 
 /*
@@ -148,7 +143,7 @@ export default class IBlockchainStorage {
    * Return hex header for given `index`
    *
    * @abstract
-   * @param {number} indices
+   * @param {number} index
    * @return {Promise<string>}
    */
   async getHeader () {

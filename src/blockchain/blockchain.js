@@ -1,15 +1,11 @@
-'use strict'
+import _ from 'lodash'
+import { EventEmitter } from 'events'
+import LRU from 'lru-cache'
+import { mixin } from 'core-decorators'
+import SyncMixin from 'sync-mixin'
 
-var _ = require('lodash')
-var EventEmitter = require('events').EventEmitter
-var inherits = require('util').inherits
-var LRU = require('lru-cache')
-var Promise = require('bluebird')
-var makeConcurrent = require('make-concurrent')(Promise)
-
-var Snapshot = require('./snapshot')
-var errors = require('../errors')
-var util = require('../util')
+import errors from '../errors'
+import { ZERO_HASH } from '../util/const'
 
 /**
  * @event Blockchain#error
@@ -26,200 +22,147 @@ var util = require('../util')
 
 /**
  * @event Blockchain#newBlock
- * @param {string} hash
- * @param {number} height
+ * @param {{hash: string, height: number}} payload
  */
 
 /**
- * @event Blockchain#touchAddress
- * @param {string} address
- * @param {string} txid
+ * @event Blockchain#newTx
+ * @param {{txId: string, address: string}} payload
  */
 
 /**
  * @class Blockchain
  * @extends events.EventEmitter
- *
- * @param {Connector} connector
- * @param {Object} [opts]
- * @param {string} [opts.networkName=livenet]
- * @param {number} [opts.txCacheSize=100]
+ * @mixes SyncMixin
  */
-function Blockchain (connector, opts) {
-  var self = this
-  EventEmitter.call(self)
+@mixin(SyncMixin)
+export default class Blockchain extends EventEmitter {
+  /*
+   * @constructor
+   * @param {Network} network
+   * @param {Object} [opts]
+   * @param {number} [opts.txCacheSize=100]
+   */
+  constructor (network, opts) {
+    super()
 
-  opts = _.extend({
-    networkName: 'livenet',
-    txCacheSize: 100
-  }, opts)
+    opts = _.extend({
+      txCacheSize: 100
+    }, opts)
 
-  self.connector = connector
-  self.networkName = opts.networkName
+    this._network = network
 
-  self._latest = {hash: util.ZERO_HASH, height: -1}
-  self._txCache = LRU({max: opts.txCacheSize, allowSlate: true})
-
-  self._isSyncing = false
-  self.on('syncStart', function () { self._isSyncing = true })
-  self.on('syncStop', function () { self._isSyncing = false })
-}
-
-inherits(Blockchain, EventEmitter)
-
-Object.defineProperty(Blockchain.prototype, 'latest', {
-  configurable: false,
-  enumerable: true,
-  get: function () { return _.clone(this._latest) }
-})
-
-Blockchain.prototype._syncStart = function () {
-  if (!this.isSyncing()) {
-    this.emit('syncStart')
-  }
-}
-
-Blockchain.prototype._syncStop = function () {
-  if (this.isSyncing()) {
-    this.emit('syncStop')
-  }
-}
-
-/**
- * @param {errors.Connector} err
- * @throws {errors.Connector}
- */
-Blockchain.prototype._rethrow = function (err) {
-  var nerr
-  switch (err.name) {
-    case 'ErrorBlockchainJSConnectorHeaderNotFound':
-      nerr = new errors.Blockchain.HeaderNotFound()
-      break
-    case 'ErrorBlockchainJSConnectorTxNotFound':
-      nerr = new errors.Blockchain.TxNotFound()
-      break
-    case 'ErrorBlockchainJSConnectorTxSendError':
-      nerr = new errors.Blockchain.TxSendError()
-      break
-    default:
-      nerr = err
-      break
+    this._latest = {hash: ZERO_HASH, height: -1}
+    this._txCache = LRU({max: opts.txCacheSize, allowSlate: true})
   }
 
-  nerr.message = err.message
-  throw nerr
+  /**
+   * @return {Network}
+   */
+  get network () {
+    return this._network
+  }
+
+  /**
+   * @return {{hash: string, height: number}}
+   */
+  get latest () {
+    return _.clone(this._latest)
+  }
+
+  /**
+   * @private
+   */
+  _networkStart () {
+    this._network.subscribe({event: 'newBlock'})
+
+    this._network.on('connect', ::this._sync)
+    this._network.on('newBlock', ::this._sync)
+    this._network.on('newTx', this.emit.bind(this, 'newTx'))
+
+    if (this._network.isConnected()) {
+      this._sync()
+    }
+  }
+
+  /**
+   * @abtract
+   * @private
+   * @return {Promise}
+   */
+  async _sync () {
+    throw new errors.NotImplemented(`${this.constructor.name}._sync`)
+  }
+
+  /**
+   * @abstract
+   * @param {(number|string)} id
+   * @return {Promise<Network~HeaderObject>}
+   */
+  async getHeader () {
+    throw new errors.NotImplemented(`${this.constructor.name}.getHeader`)
+  }
+
+  /**
+   * @param {string} txId
+   * @return {Promise<string>}
+   */
+  getTx (txId) {
+    let deferred = this._txCache.get(txId)
+    if (deferred === undefined || deferred.isRejected === true) {
+      deferred = {isRejected: false}
+      deferred.promise = new Promise(async (resolve, reject) => {
+        try {
+          resolve(await this._network.getTx(txId))
+        } catch (err) {
+          deferred.isRejected = true
+          reject(err)
+        }
+      })
+      this._txCache.set(txId, deferred)
+    }
+
+    return deferred.promise
+  }
+
+  /**
+   * @abstract
+   * @param {string} txId
+   * @return {Promise<?{hash: string, height: number}>}
+   */
+  async getTxBlockInfo () {
+    throw new errors.NotImplemented(`${this.constructor.name}.getTxBlockInfo`)
+  }
+
+  /**
+   * @abstract
+   * @param {string} rawTx
+   * @return {Promise}
+   */
+  sendTx (rawTx) {
+    return this._network.sendTx(rawTx)
+  }
+
+  /**
+   * @abstract
+   * @param {string[]} addresses
+   * @param {Object} [opts]
+   * @param {(string|number)} [opts.from]
+   * @param {(string|number)} [opts.to]
+   * @param {boolean} [opts.unspent=false]
+   * @return {Promise<Network~AddressesQueryObject>}
+   */
+  async addressesQuery () {
+    throw new errors.NotImplemented(`${this.constructor.name}.addressesQuery`)
+  }
+
+  /**
+   * @abstract
+   * @param {Object} opts
+   * @param {string} opts.address
+   * @return {Promise}
+   */
+  subscribe (opts) {
+    return this._network.subscribe({event: 'newTx', address: _.get(opts, 'address')})
+  }
 }
-
-/**
- * @param {string} newHash
- * @param {number} newHeight
- * @return {Promise}
- */
-Blockchain.prototype._syncBlockchain = function () {
-  return Promise.reject(
-    new errors.NotImplemented(this.constructor.name + '._syncBlockchain'))
-}
-
-/**
- */
-Blockchain.prototype._syncLatest = makeConcurrent(function () {
-  var self = this
-  return self.connector.getHeader('latest')
-    .then(function (header) {
-      return self._syncBlockchain(header.hash, header.height)
-    })
-    .catch(function (err) {
-      self.emit('error', err)
-    })
-}, {concurrency: 1})
-
-/**
- * Return current syncing status
- *
- * @return {boolean}
- */
-Blockchain.prototype.isSyncing = function () {
-  return this._isSyncing
-}
-
-/**
- * @return {Promise<Snapshot>}
- */
-Blockchain.prototype.getSnapshot = function () {
-  return Promise.resolve(new Snapshot(this))
-}
-
-/**
- * @abstract
- * @param {(number|string)} id height or hash
- * @return {Promise<Connector~HeaderObject>}
- */
-Blockchain.prototype.getHeader = function () {
-  return Promise.reject(
-    new errors.NotImplemented(this.constructor.name + '.getHeader'))
-}
-
-/**
- * @abstract
- * @param {string} txid
- * @return {Promise<string>}
- */
-Blockchain.prototype.getTx = function () {
-  return Promise.reject(
-    new errors.NotImplemented(this.constructor.name + '.getTx'))
-}
-
-/**
- * @typedef {Object} Blockchain~TxBlockHashObject
- * @property {string} source `blocks` or `mempool`
- * @property {Object} [block] defined only when source is blocks
- * @property {string} data.hash
- * @property {number} data.height
- */
-
-/**
- * @abstract
- * @param {string} txid
- * @return {Promise<Blockchain~TxBlockHashObject>}
- */
-Blockchain.prototype.getTxBlockHash = function () {
-  return Promise.reject(
-    new errors.NotImplemented(this.constructor.name + '.getTxBlockHash'))
-}
-
-/**
- * @abstract
- * @param {string} rawtx
- * @return {Promise<string>}
- */
-Blockchain.prototype.sendTx = function () {
-  return Promise.reject(
-    new errors.NotImplemented(this.constructor.name + '.sendTx'))
-}
-
-/**
- * @abstract
- * @param {string[]} addresses
- * @param {Object} [opts]
- * @param {string} [opts.source] `blocks` or `mempool`
- * @param {(string|number)} [opts.from] `hash` or `height`
- * @param {(string|number)} [opts.to] `hash` or `height`
- * @param {string} [opts.status]
- * @return {Promise<Connector~AddressesQueryObject>}
- */
-Blockchain.prototype.addressesQuery = function () {
-  return Promise.reject(
-    new errors.NotImplemented(this.constructor.name + '.addressesQuery'))
-}
-
-/**
- * @abstract
- * @param {string} address
- * @return {Promise}
- */
-Blockchain.prototype.subscribeAddress = function () {
-  return Promise.reject(
-    new errors.NotImplemented(this.constructor.name + '.subscribeAddress'))
-}
-
-module.exports = Blockchain

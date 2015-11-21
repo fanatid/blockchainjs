@@ -1,52 +1,37 @@
-'use strict'
+import { expect } from 'chai'
+import { EventEmitter } from 'events'
 
-var _ = require('lodash')
-var expect = require('chai').expect
-var EventEmitter = require('events').EventEmitter
+import blockchainjs from '../../src'
 
-var blockchainjs = require('../../src')
+import { ZERO_HASH } from '../helpers'
 
-var notImplementedMethods = [
+let notImplementedMethods = [
   'getHeader',
-  'getTx',
-  'getTxBlockHash',
-  'sendTx',
-  'addressesQuery',
-  'subscribeAddress'
+  'getTxBlockInfo',
+  'addressesQuery'
 ]
 
-describe.skip('blockchain.Blockchain', function () {
-  var connector
-  var blockchain
+describe('blockchain.Blockchain', () => {
+  let network
+  let blockchain
 
-  beforeEach(function () {
-    connector = new blockchainjs.connector.Connector()
-    blockchain = new blockchainjs.blockchain.Blockchain(connector)
+  beforeEach(() => {
+    network = new blockchainjs.network.Network()
+    blockchain = new blockchainjs.blockchain.Blockchain(network)
   })
 
-  afterEach(function () {
-    connector = null
-    blockchain = null
-  })
-
-  it.skip('inherits EventEmitter', function () {
+  it('inherits EventEmitter', () => {
     expect(blockchain).to.be.instanceof(blockchainjs.blockchain.Blockchain)
     expect(blockchain).to.be.instanceof(EventEmitter)
   })
 
-  it.skip('latest', function () {
-    var expected = {hash: blockchainjs.util.ZERO_HASH, height: -1}
-    expect(blockchain.latest).to.deep.equal(expected)
+  it('latest', () => {
+    expect(blockchain.latest).to.deep.equal({hash: ZERO_HASH, height: -1})
   })
 
-  notImplementedMethods.forEach(function (method) {
-    it.skip(method, function (done) {
-      blockchain[method]()
-        .asCallback(function (err) {
-          expect(err).to.be.instanceof(blockchainjs.errors.NotImplemented)
-          done()
-        })
-        .done(_.noop, _.noop)
+  notImplementedMethods.forEach((method) => {
+    it(method, () => {
+      return expect(blockchain[method]()).to.be.rejectedWith(blockchainjs.errors.NotImplemented)
     })
   })
 })

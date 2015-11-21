@@ -1,762 +1,430 @@
-'use strict'
+import _ from 'lodash'
+import LRU from 'lru-cache'
+import makeConcurrent from 'make-concurrent'
+import spvUtils from 'bitcoin-spv-utils'
+import getTxMerkle from 'bitcoin-proof'
 
-var _ = require('lodash')
-var inherits = require('util').inherits
-var assert = require('assert')
-var BigInteger = require('bigi')
-var LRU = require('lru-cache')
-var Promise = require('bluebird')
-var makeConcurrent = require('make-concurrent')(Promise)
-var timers = require('timers')
-
-var Blockchain = require('./blockchain')
-var errors = require('../errors')
-var util = require('../util')
-
-var MAX_BITS = 0x1d00ffff
-var MAX_TARGET = '00000000FFFF0000000000000000000000000000000000000000000000000000'
-var MAX_TARGET_BI = BigInteger.fromHex(MAX_TARGET)
-
-/**
- * Get target object for chunk (set of 2016 headers)
- *
- * @param {number} index
- * @param {string[]} headersChain
- * @param {function} getHeader
- * @return {Promise<{bits: number, target: string}>}
- */
-function getTarget (index, headersChain, getHeader) {
-  if (index === 0) {
-    return Promise.resolve({bits: MAX_BITS, target: MAX_TARGET})
-  }
-
-  return Promise.try(function () {
-    // get first header of chunk
-    var firstHeader = getHeader((index - 1) * 2016)
-
-    // try get last header from headersChain
-    var lastHeader = _.find(headersChain, {height: index * 2016 - 1})
-    // ... or get from storage as firstHeader
-    if (lastHeader === undefined) {
-      lastHeader = getHeader(index * 2016 - 1)
-    }
-
-    // wait, becase getHeader return promise
-    return Promise.all([firstHeader, lastHeader])
-  })
-  .spread(function (firstHeader, lastHeader) {
-    var nTargetTimestamp = 14 * 24 * 60 * 60
-    var nActualTimestamp = lastHeader.time - firstHeader.time
-    nActualTimestamp = Math.max(nActualTimestamp, nTargetTimestamp / 4)
-    nActualTimestamp = Math.min(nActualTimestamp, nTargetTimestamp * 4)
-
-    var bits = lastHeader.bits
-    var MM = 256 * 256 * 256
-    var a = bits % MM
-    if (a < 0x8000) {
-      a = a * 256
-    }
-
-    var target = new BigInteger(a.toString(10), 10)
-    target = target.multiply(new BigInteger('2', 10).pow(8 * (Math.floor(bits / MM) - 3)))
-    target = target.multiply(new BigInteger(nActualTimestamp.toString(10), 10))
-    target = target.divide(new BigInteger(nTargetTimestamp.toString(10), 10))
-    target = target.min(MAX_TARGET_BI)
-
-    var c = util.zfill(target.toHex(), 64)
-    var i = 32
-    while (c.slice(0, 2) === '00') {
-      c = c.slice(2)
-      i -= 1
-    }
-
-    c = parseInt(c.slice(0, 6), 16)
-    if (c > 0x800000) {
-      c = Math.floor(c / 256)
-      i += 1
-    }
-
-    return {bits: c + MM * i, target: target.toHex()}
-  })
-}
-
-/**
- * Check that given `hash` lower than `target`
- *
- * @param {string} hash
- * @param {string} target
- * @return {Boolean}
- */
-function isGoodHash (hash, target) {
-  hash = new Buffer(hash, 'hex')
-  target = new Buffer(target, 'hex')
-
-  return _.range(32).some(function (index) {
-    return hash[index] < target[index]
-  })
-}
-
-/**
- * Verify current header
- *
- * @param {string} currentHash
- * @param {BitcoinHeader} currentHeader
- * @param {string} hashPrevBlock
- * @param {BitcoinHeader} prevHeader
- * @param {{bits: number, target: string}} target
- * @param {Boolean} isTestnet
- * @throws {VerifyHeaderError}
- */
-function verifyHeader (currentHash, currentHeader, hashPrevBlock, prevHeader, target, isTestnet) {
-  try {
-    // check hashPrevBlock
-    assert.equal(hashPrevBlock, currentHeader.hashPrevBlock)
-
-    try {
-      // check difficulty
-      assert.equal(currentHeader.bits, target.bits)
-      // check hash and target
-      assert.equal(isGoodHash(currentHash, target.target), true)
-    } catch (err) {
-      // special case for testnet:
-      // If no block has been found in 20 minutes, the difficulty automatically
-      //  resets back to the minimum for a single block, after which it returns
-      //  to its previous value.
-      if (!(err instanceof assert.AssertionError &&
-            isTestnet &&
-            currentHeader.time - prevHeader.time > 1200)) {
-        throw err
-      }
-
-      assert.equal(currentHeader.bits, MAX_BITS)
-      assert.equal(isGoodHash(currentHash, MAX_TARGET), true)
-    }
-  } catch (err) {
-    if (err instanceof assert.AssertionError) {
-      throw new errors.Blockchain.VerifyHeaderError(currentHash, 'verification failed')
-    }
-
-    throw err
-  }
-}
+import Blockchain from './blockchain'
+import { buffer2header } from '../util/header'
+import { sha256x2, hashEncode } from '../util/crypto'
+import errors from '../errors'
 
 /**
  * @typedef Verified~ChunkHashesObject
  * @property {string} lastBlockHash
  * @property {string[]} chunkHashes
  */
-
 /**
  * @class Verified
  * @extends Blockchain
- *
- * @param {Connector} connector
- * @param {Object} opts
- * @param {Storage} opts.storage
- * @param {string} [opts.networkName=livenet]
- * @param {boolean} [opts.testnet=false]
- * @param {boolean} [opts.compactMode=false]
- * @param {?Verified~ChunkHashesObject} [opts.chunkHashes=null]
  */
-function Verified (connector, opts) {
-  var self = this
-  Blockchain.call(self, connector, opts)
+export default class Verified extends Blockchain {
+  /*
+   * @constructor
+   * @param {Network} network
+   * @param {Object} opts
+   * @param {IBlockchainStorage} opts.storage
+   * @param {boolean} [opts.compact=false]
+   * @param {boolean} [opts.testnet=false]
+   * @param {number} [opts.txCacheSize=100]
+   * @param {number} [opts.chunkCacheSize=4]
+   * @param {?Verified~ChunkHashesObject} [opts.chunkHashes=null]
+   */
+  constructor (network, opts) {
+    super(network, opts)
 
-  opts = _.extend({
-    testnet: false,
-    compactMode: false,
-    chunkHashes: null,
-    chunkCacheSize: 4
-  }, opts)
+    opts = _.extend({
+      testnet: false,
+      compact: false,
+      chunkCacheSize: 4,
+      chunkHashes: null
+    })
 
-  if (self.connector.networkName !== self.networkName) {
-    throw new errors.NetworkNameMatchError(
-      self.networkName, self.connector.networkName)
+    // check that storage has same compact mode
+    this._storage = opts.storage
+    if (opts.compact !== this._storage.compact) {
+      throw new TypeError('Storage and Blockchain have different compact mode')
+    }
+
+    // required in headers verification (testnet has special rule!)
+    this._testnet = opts.testnet
+
+    // create chunk cache
+    this._chunkCache = LRU({max: opts.chunkCacheSize, allowSlate: true})
+
+    // wait storage.ready, boostrap and start
+    this._withSync(async () => {
+      await this._storage.ready
+      await this._bootstrap(opts.chunkHashes)
+      this._networkStart()
+    })
+    .catch(this.emit.bind('error'))
   }
 
-  if (opts.compactMode !== opts.storage.compactMode) {
-    throw new TypeError('Storage and Blockchain have different compactMode')
+  /**
+   * @param {?Verified~ChunkHashesObject} chunkHashes
+   * @return {Promise}
+   */
+  async _bootstrap (chunkHashes) {
+    if (this._storage.compact) {
+      let chunkHashesCount = await this._storage.getChunkHashesCount()
+      let headersCount = await this._storage.getHeadersCount()
+      if (chunkHashesCount === 0 && headersCount === 0 && chunkHashes !== null) {
+        await this._storage.setLastHash(chunkHashes.lastBlockHash)
+        await this._storage.putChunkHashes(chunkHashes.chunkHashes)
+      }
+
+      chunkHashesCount = await this._storage.getChunkHashesCount()
+      this._latest = {
+        hash: await this._storage.getLastHash(),
+        height: chunkHashesCount * 2016 + headersCount - 1
+      }
+    } else {
+      let headersCount = await this._storage.getHeadersCount()
+      this._latest = {
+        hash: await this._storage.getLastHash(),
+        height: headersCount - 1
+      }
+    }
+
+    if (this._latest.height !== -1) {
+      this.emit('newBlock', this.latest) // emit with clone of _latest
+    }
   }
 
-  // save storage (opts.compactMode not needed because already yet in storage)
-  self.storage = opts.storage
+  /**
+   * @private
+   * @return {Promise}
+   */
+  @makeConcurrent({concurrency: 1})
+  async _sync () {
+    let savedLatestHash = this._latest.hash
+    try {
+      await this._withSync(async () => {
+        let latestNetwork = await this._network.getHeader('latest')
+        if (latestNetwork.hash === this._latest.hash) {
+          return
+        }
 
-  // save testnet mode, needed for header verification
-  self._isTestnet = opts.testnet
+        let networkIndex = Math.floor(latestNetwork.height / 2016)
 
-  // create chunk cache
-  self._chunkCache = LRU({max: opts.chunkCacheSize, allowSlate: true})
+        let currentIndex
+        function updateCurrentIndex () {
+          currentIndex = Math.floor(this._latest.height / 2016)
 
-  // listen touchAddress event
-  self.connector.on('touchAddress', function (address, txid) {
-    self.emit('touchAddress', address, txid)
-  })
+          // invalidate chunk cache
+          for (let i = Math.min(networkIndex, currentIndex), m = Math.max(networkIndex, currentIndex); i < m; ++i) {
+            this._chunkCache.del(i)
+          }
+        }
+        updateCurrentIndex()
 
-  // wait when the storage will be ready and run initialization
-  Promise.try(function () {
-    timers.setImmediate(function () { self._syncStart() })
-  })
-  .then(function () {
-    if (self.storage.isReady()) {
+        // reorg precheck (save traffic)
+        if (this._latest.height >= latestNetwork.height) {
+          await this._reorgHandler()
+          updateCurrentIndex()
+        }
+
+        // sync with headers
+        if (latestNetwork.height - this._latest.height < 50) {
+          let headers = await this._getHeadersChain(this._latest.height)
+          if (this._latest.hash !== headers[0].slice(8, 72)) {
+            await this._reorgHandler()
+            updateCurrentIndex()
+            headers = await this._getHeadersChain(this._latest.height)
+          }
+
+          await this._verifyHeaders(headers)
+          await this._saveHeaders(headers)
+          return
+        }
+
+        // sync with chunks
+        while (currentIndex <= networkIndex) {
+          let headers = await this._getHeadersChunk(currentIndex)
+          if (this._latest.hash !== headers[0].slice(8, 72)) {
+            await this._reorgHandler()
+            updateCurrentIndex()
+            continue
+          }
+
+          await this._verifyHeaders(headers)
+          await this._saveHeaders(headers)
+          this._chunkCache.set(currentIndex, {promise: Promise.resolve(headers), isRejected: false})
+          currentIndex += 1
+        }
+      })
+    } catch (err) {
+      this.emit('error', err)
+    } finally {
+      if (this._latest.hash !== savedLatestHash) {
+        this.emit('newBlock', this.latest) // emit with clone of _latest
+      }
+    }
+  }
+
+  /**
+   * @private
+   * @param {number} height
+   * @return {Promise<string[]>}
+   */
+  async _getHeadersChain (height) {
+    let opts = {height: height >= 0 ? height : null}
+    let headers = await this._network.getHeaders(opts)
+
+    return _.range(0, headers.length, 160).map((offset) => {
+      return headers.slice(offset, offset + 160)
+    })
+  }
+
+  /**
+   * @private
+   * @param {number} index
+   * @return {Promise<string[]>}
+   */
+  _getHeadersChunk (index) {
+    return this._getHeadersChain(index * 2016 - 1)
+  }
+
+  /**
+   * @private
+   * @param {string[]} headers
+   * @return {Promise}
+   */
+  async _verifyHeaders (headers) {
+    let [previousHeader, target] = [null, spvUtils.getMaxTarget()]
+
+    let chunkIndex = Math.floor(this._latest.height / 2016)
+    if (chunkIndex !== 0) {
+      previousHeader = await this.getHeader(this._latest.height - 1)
+
+      let [first, last] = await* [
+        this.getHeader((chunkIndex - 1) * 2016),
+        this.getHeader(chunkIndex * 2016 - 1)
+      ]
+      target = spvUtils.getTarget(first, last)
+    }
+
+    let rawHeaders = headers.map(header => new Buffer(header, 'hex'))
+    if (!spvUtils.verifyHeaders(rawHeaders, previousHeader, target, this._testnet)) {
+      throw new errors.Blockchain.VerifyBlockchainError(JSON.stringify(this._latest))
+    }
+  }
+
+  /**
+   * @private
+   * @param {string[]} headers
+   * @return {Promise}
+   */
+  async _saveHeaders (headers) {
+    let latestNew = {
+      hash: hashEncode(sha256x2(new Buffer(_.last(headers), 'hex'))),
+      height: this._latest.height + headers.length
+    }
+
+    // full mode or same chunk (but not more than 2015 headers)
+    if (this._storage.compact === false ||
+        await this._storage.getChunkHashesCount() === Math.floor((latestNew.height + 1) / 2016)) {
+      await* [
+        this._storage.putHeaders(headers),
+        this._storage.setLastHash(latestNew.hash)
+      ]
+      this._latest = latestNew
       return
     }
 
-    return self.storage.ready
-  })
-  .then(function () {
-    return self._initialize(opts)
-  })
-  .then(function () {
-    function onConnect () { self._syncLatest() }
-    // run syncing using latest
-    self.connector.on('connect', onConnect)
-    if (self.connector.isConnected()) { onConnect() }
-
-    var prevHeight = self._latest.height
-    self.connector.on('newBlock', function (newHash, newHeight) {
-      // invalidate chunk cache
-      var prevChunkIndex = Math.floor(prevHeight / 2016)
-      var currChunkIndex = Math.floor(newHeight / 2016)
-      _.range(prevChunkIndex, currChunkIndex).forEach(function (index) {
-        self._chunkCache.del(index)
-      })
-      prevHeight = newHeight
-
-      // sync blockchain with latest header
-      self._syncLatest()
+    // get saved headers and fill to full chunk
+    let savedHeaders = await _.range(await this._storage.getHeadersCount()).map((index) => {
+      return this._storage.getHeader(index)
     })
 
-    self.connector.subscribe({event: 'newBlock'})
-  })
-}
-
-inherits(Verified, Blockchain)
-
-/**
- * Serial function, only one _sync can be running at one moment
- *
- * @param {string} newHash
- * @param {number} newHeight
- * @return {Promise}
- */
-Verified.prototype._syncBlockchain = makeConcurrent(function (newHash, newHeight) {
-  var self = this
-  // exit if is not ready yet or if hash not changed
-  if (newHash === self._latest.hash) {
-    self._syncStop()
-    return Promise.resolve()
-  }
-
-  return Promise.try(function () {
-    self._syncStart()
-  })
-  .then(function () {
-    return self._sync(newHash, newHeight)
-  })
-  .then(function () {
-    self._syncStop()
-  })
-}, {concurrency: 1})
-
-/**
- * Load last block hash and height from storage
- *  or fills chunk hashes on first start storage use compactMode
- *
- * @param {Object} opts
- * @param {?Verified~ChunkHashesObject} opts.chunkHashes
- * @return {Promise}
- */
-Verified.prototype._initialize = function (opts) {
-  var self = this
-
-  return Promise.all([
-    self.storage.compactMode ? self.storage.getChunkHashesCount() : null,
-    self.storage.getHeadersCount()
-  ])
-  .spread(function (chunkHashesCount, headersCount) {
-    // load pre-saved data
-    var loadPreSaved = (chunkHashesCount === 0 && headersCount === 0 &&
-                        opts.chunkHashes !== null && self.storage.compactMode)
-
-    if (loadPreSaved) {
-      return Promise.all([
-        self.storage.setLastHash(opts.chunkHashes.lastBlockHash),
-        self.storage.putChunkHashes(opts.chunkHashes.chunkHashes)
-      ])
-    }
-  })
-  .then(function () {
-    return Promise.all([
-      self.storage.getLastHash(),
-      self.storage.compactMode ? self.storage.getChunkHashesCount() : null,
-      self.storage.getHeadersCount()
-    ])
-  })
-  .spread(function (lastHash, chunkHashesCount, headersCount) {
-    // recover latest
-    if (chunkHashesCount !== 0 || headersCount !== 0) {
-      self._latest = {
-        hash: lastHash,
-        height: (headersCount - 1)
-      }
-
-      if (self.storage.compactMode) {
-        self._latest.height += chunkHashesCount * 2016
-      }
-
-      timers.setImmediate(function () {
-        self.emit('newBlock', self._latest.hash, self._latest.height)
-      })
-    }
-  })
-}
-
-/**
- * @param {string} networkHash
- * @param {number} networkHeight
- * @return {Promise}
- */
-Verified.prototype._sync = function (networkHash, networkHeight) {
-  var self = this
-  var deferred = Promise.defer()
-
-  // calculate chunk indices
-  var networkIndex = Math.max(Math.floor(networkHeight / 2016), 0)
-  var index = Math.min(
-    networkIndex, Math.max(Math.floor(self._latest.height / 2016), 0))
-
-  // headers local chain
-  var headersChain = []
-
-  /**
-   * chunk: download, verify, save, change index, repeat
-   */
-  function syncThroughChunks (prevChunk) {
-    // all already synced?
-    if (index > networkIndex) {
-      return deferred.resolve()
+    while (savedHeaders.length !== 2016) {
+      savedHeaders.push(headers.shift())
     }
 
-    function cachedGetHeader (id) {
-      if (prevChunk === undefined ||
-          !_.isNumber(id) ||
-          Math.floor(id / 2016) !== index - 1) {
-        return self.getHeader(id)
-      }
+    // put chunk hash, truncate headers and set latest hash
+    let chunkHash = sha256x2(new Buffer(savedHeaders.join(''), 'hex'))
+    let latestHash = hashEncode(sha256x2(new Buffer(_.last(savedHeaders), 'hex')))
+    await* [
+      this._storage.putChunkHashes([chunkHash]),
+      this._storage.truncateHeaders(0),
+      this._storage.setLastHash(latestHash)
+    ]
 
-      var idx = id % 2016
-      var rawHeader = prevChunk.slice(idx * 80, (idx + 1) * 80)
-      return Promise.resolve(_.extend(util.buffer2header(rawHeader), {
-        height: id,
-        hash: util.hashEncode(util.sha256x2(rawHeader))
-      }))
+    this._latest = {
+      hash: latestHash,
+      height: (Math.floor(this._latest.height / 2016) + 1) * 2016 - 1
     }
 
-    // get not verified chunk for index
-    self.connector.headersQuery(index * 2016, {count: 2016})
-      .then(function (res) {
-        var chunkHex = res.headers
-        if (index === networkIndex) {
-          chunkHex = chunkHex.slice(0, 160 * (networkHeight % 2016))
-        }
-
-        var prevHeaderPromise = index === 0
-          ? {hash: util.ZERO_HASH} // special case for zero header
-          : cachedGetHeader(index * 2016 - 1)
-
-        return Promise.all([prevHeaderPromise, new Buffer(chunkHex, 'hex')])
-      })
-      .spread(function (prevHeader, rawChunk) {
-        // compare hashPrevBlock of first header from chunk
-        //  and derease index for blockchain reorg if not equal
-        var firstHeader = util.buffer2header(rawChunk.slice(0, 80))
-        if (firstHeader.hashPrevBlock !== prevHeader.hash) {
-          index -= 1
-          return timers.setImmediate(syncThroughChunks)
-        }
-
-        // remember for verifyHeader
-        var prevHeaderHash = prevHeader.hash
-
-        // calculate hash of last header from chunk for blockchain and storage
-        var lastHash = util.hashEncode(util.sha256x2(rawChunk.slice(-80)))
-
-        // calculate target for index
-        return getTarget(index, headersChain, cachedGetHeader)
-          .then(function (target) {
-            // verify headers in chunk
-            _.range(0, rawChunk.length, 80).forEach(function (offset) {
-              var rawHeader = rawChunk.slice(offset, offset + 80)
-              var currentHash = util.hashEncode(util.sha256x2(rawHeader))
-              var currentHeader = util.buffer2header(rawHeader)
-
-              verifyHeader(currentHash, currentHeader,
-                           prevHeaderHash, prevHeader, target, self._isTestnet)
-
-              prevHeaderHash = currentHash
-              prevHeader = currentHeader
-            })
-
-            // set last hash to storage
-            var promises = [self.storage.setLastHash(lastHash)]
-
-            // truncate chunk hashes and headers if compact mode supported
-            if (self.storage.compactMode) {
-              promises.push(self.storage.truncateChunkHashes(index))
-              promises.push(self.storage.truncateHeaders(0))
-            }
-            // truncate headers if compact mode not supported
-            //  affected only when reorg needed
-            if (!self.storage.compactMode) {
-              promises.push(self.storage.truncateHeaders(index * 2016))
-            }
-
-            // wait all storage queries
-            return Promise.all(promises)
-          })
-          .then(function () {
-            // save chunk hash or headers
-            if (self.storage.compactMode && rawChunk.length === 2016 * 80) {
-              var chunkHash = util.hashEncode(util.sha256x2(rawChunk))
-              return self.storage.putChunkHashes([chunkHash])
-            } else {
-              var headers = _.range(0, rawChunk.length, 80).map(function (offset) {
-                return rawChunk.slice(offset, offset + 80).toString('hex')
-              })
-              return self.storage.putHeaders(headers)
-            }
-          })
-          .then(function () {
-            // update block hash and height for blockchain
-            self._latest = {
-              hash: lastHash,
-              height: index * 2016 + rawChunk.length / 80 - 1
-            }
-            self.emit('newBlock', self._latest.hash, self._latest.height)
-
-            // increase chunk index
-            index += 1
-
-            // sync next chunk
-            timers.setImmediate(syncThroughChunks, rawChunk)
-          })
-      })
-      .catch(function (err) { deferred.reject(err) })
+    return await this._saveHeaders(headers)
   }
 
   /**
-   * headers: verify, save and return promise
+   * @private
+   * @return {Promise}
    */
-  function syncThroughHeaders (prevHeader) {
-    // convert headers in headersChain to hex format
-    var hexHeaders = headersChain.map(function (data) {
-      return util.header2buffer(data).toString('hex')
-    })
-
-    return Promise.try(function () {
-      // target cache, it's help saves calls getTarget (0..49 times)
-      var targets = {}
-      function getCachedTarget (chunkIndex) {
-        if (targets[chunkIndex] !== undefined) {
-          return Promise.resolve(targets[chunkIndex])
-        }
-
-        return getTarget.apply(null, arguments)
-          .then(function (target) {
-            targets[chunkIndex] = target
-            return target
-          })
-      }
-
-      var getHeaderFn = self.getHeader.bind(self)
-      return Promise.reduce(headersChain, function (prevHeader, header) {
-        var chunkIndex = Math.floor(header.height / 2016)
-        return getCachedTarget(chunkIndex, headersChain, getHeaderFn)
-          .then(function (target) {
-            verifyHeader(header.hash, header,
-                         prevHeader.hash, prevHeader, target, self._isTestnet)
-
-            return header
-          })
-      }, prevHeader)
-    })
-    .then(function () {
-      return self.storage.setLastHash(_.last(headersChain).hash)
-    })
-    .then(function () {
-      return self.storage.compactMode
-        ? self.storage.getChunkHashesCount()
-        : null
-    })
-    .then(function (chunkHashesCount) {
-      var lastHeaderChunkIndex = Math.floor(_.last(headersChain).height / 2016)
-      // in full mode all easy, just put headers to storage,
-      //  as in compact mode
-      //   if current chunk index match with chunk index of last header
-      if (!self.storage.compactMode ||
-          chunkHashesCount === lastHeaderChunkIndex) {
-        return self.storage.putHeaders(hexHeaders)
-      }
-
-      // collect headers to chunk and compute chunk hash
-      return self.storage.getHeadersCount()
-        .then(function (headersCount) {
-          // get header from storage
-          return Promise.map(_.range(headersCount), function (index) {
-            return self.storage.getHeader(index)
-          })
-        })
-        .then(function (headers) {
-          // all headers are obtained from storage,
-          //  now add headers from headersChain
-          for (var index = 0; headers.length !== 2016; index += 1) {
-            headers.push(hexHeaders[index])
+  async _reorgHandler () {
+    // full mode
+    if (this._storage.compact === false) {
+      while (true) {
+        try {
+          // check that header by this hash still exists
+          await this._network.getHeader(this._latest.hash)
+        } catch (err) {
+          if (!(err instanceof errors.Network.HeaderNotFound)) {
+            throw err
           }
 
-          // convert to buffer and compute hash
-          var rawChunk = new Buffer(headers.join(''), 'hex')
-          var chunkHash = util.hashEncode(util.sha256x2(rawChunk))
+          // calculate new latest
+          let previousHeight = this._latest.height - 1
+          let previousHeader = await this._storage.getHeader(previousHeight)
+          this._latest = {
+            hash: hashEncode(sha256x2(new Buffer(previousHeader, 'hex'))),
+            height: previousHeight
+          }
 
-          // put chunk hash and truncate headers
-          return Promise.all([
-            self.storage.putChunkHashes([chunkHash]),
-            self.storage.truncateHeaders(0)
-          ])
-        })
-        .then(function () {
-          // select headers not included in chunk ...
-          var startHeight = chunkHashesCount * 2016
-          var hexHeaders = _.chain(headersChain)
-            .filter(function (header) {
-              return header.height >= startHeight
-            })
-            .map(function (header) {
-              return util.header2buffer(header).toString('hex')
-            })
-            .value()
+          // drop latest header and update latest hash
+          await* [
+            this._storage.truncateHeaders(this._latest.height),
+            this._storage.setLastHash(this._latest.hash)
+          ]
 
-          // ... and save
-          return self.storage.putHeaders(hexHeaders)
-        })
-    })
-    .then(function () {
-      // update block hash and height for blockchain
-      var latest = _.last(headersChain)
-      self._latest = {hash: latest.hash, height: latest.height}
-      self.emit('newBlock', self._latest.hash, self._latest.height)
-    })
-  }
+          continue
+        }
 
-  // sync through chunk or headers depends from
-  //  - long distance between blockchain and network heights
-  //  - reorg needed (supported only in syncThroughChunks)
-  var delta = networkHeight - self._latest.height
-  if (delta <= 0 || delta > 50) {
-    // syncing with chunks
-    syncThroughChunks()
-  } else {
-    // download all headers between blockchain height and network height
-    var headers = self.connector.headersQuery(
-      self._latest.height + 1, {count: (networkHeight - self._latest.height)})
+        return
+      }
+    }
 
-    Promise.all([
-      headers,
-      self.getHeader(self._latest.height) // required for reorg check
-    ])
-    .spread(function (res, prevHeader) {
-      headersChain = _.range(res.count).map(function (index) {
-        var hexHeader = res.headers.slice(index * 160, (index + 1) * 160)
-        var rawHeader = new Buffer(hexHeader, 'hex')
-        return _.extend(util.buffer2header(rawHeader), {
-          height: self._latest.height + index + 1,
-          hash: util.hashEncode(util.sha256x2(rawHeader))
-        })
-      })
-
-      // check the need for reorg
-      if (headersChain[0].hashPrevBlock !== prevHeader.hash) {
-        return syncThroughChunks()
+    // compact mode
+    let chunkIndex = await this._storage.getChunkHashesCount() - 1
+    while (true) {
+      let headers = await this._getHeadersChunk(chunkIndex)
+      let chunkHash = sha256x2(new Buffer(headers.join(''), 'hex'))
+      if (chunkHash === await this._storage.getChunkHash(chunkIndex)) {
+        this._latest = {
+          hash: hashEncode(sha256x2(new Buffer(_.last(headers), 'hex'))),
+          height: chunkIndex * 2016 - 1
+        }
+        this._chunkCache.set(chunkIndex, {promise: Promise.resolve(headers), isRejected: false})
+        break
       }
 
-      // reorg not needed, sync through headers
-      return syncThroughHeaders(prevHeader)
-    })
-    .then(function () { deferred.resolve() })
-    .catch(function (err) { deferred.reject(err) })
-  }
-
-  return deferred.promise
-}
-
-/**
- * @param {(number|string)} id height or hash
- * @return {Promise<Connector~HeaderObject>}
- */
-Verified.prototype.getHeader = function (id) {
-  var self = this
-
-  if (!_.isNumber(id)) {
-    return self.connector.getHeader(id)
-      .then(function (header) {
-        return self.getHeader(header.height)
-          .then(function (localHeader) {
-            if (localHeader.hash === header.hash) {
-              return localHeader
-            }
-
-            throw new errors.Blockchain.VerifyHeaderError(id, 'hashes do not match')
-          })
-      })
-  }
-
-  var height = id
-  return Promise.try(function () {
-    if (height > self._latest.height) {
-      throw new errors.Blockchain.VerifyHeaderError(height, 'has not been yet imported')
+      chunkIndex -= 1
     }
 
-    // not in compactMode -- all easy, just get by height
-    if (!self.storage.compactMode) {
-      return self.storage.getHeader(height)
+    await* [
+      this._storage.truncateHeaders(0),
+      this._storage.truncateChunkHashes(chunkIndex + 1),
+      this._storage.setLastHash(this._latest.hash)
+    ]
+  }
+
+  /**
+   * @private
+   * @param {number} height
+   * @return {Promise<string>}
+   */
+  async _getHeaderByHeight (height) {
+    if (this._storage.compact === false) {
+      return await this._storage.getHeader(height)
     }
 
-    var currentChunkIndex = Math.floor((self._latest.height + 1) / 2016)
     var headerChunkIndex = Math.floor(height / 2016)
     var headerIndex = height % 2016
 
-    // get from storage if currentChunkIndex match with headerChunkIndex
-    if (currentChunkIndex === headerChunkIndex) {
-      return self.storage.getHeader(headerIndex)
+    if (headerChunkIndex === Math.floor((this._latest.height + 1) / 2016)) {
+      return await this._storage.getHeader(headerIndex)
     }
 
-    // get chunk from network.. heavy operation
-    return Promise.try(function () {
-      if (!self._chunkCache.has(headerChunkIndex) ||
-          self._chunkCache.get(headerChunkIndex).isRejected()) {
-        var promise = self.connector.getHeader(headerChunkIndex * 2016)
-          .then(function (header) {
-            return Promise.all([
-              self.connector.headersQuery(header.hash),
-              self.storage.getChunkHash(headerChunkIndex)
-            ])
-          })
-          .spread(function (res, chunkHash) {
-            var chunkHex = res.headers
-            var rawChunk = new Buffer(chunkHex, 'hex')
-            var newChunkHash = util.hashEncode(util.sha256x2(rawChunk))
-            if (newChunkHash !== chunkHash) {
-              throw new errors.Blockchain.VerifyChunkError(headerChunkIndex, 'wrong hash')
-            }
+    let deferred = this._chunkCache.get(headerChunkIndex)
+    if (deferred === undefined || deferred.isRejected === true) {
+      deferred = {isRejected: false}
+      deferred.promise = new Promise(async (resolve, reject) => {
+        try {
+          resolve(await this._getHeadersChunk(headerChunkIndex))
+        } catch (err) {
+          deferred.isRejected = true
+          reject(err)
+        }
+      })
+      this._chunkCache.set(headerChunkIndex, deferred)
+    }
 
-            return rawChunk
-          })
+    let headers = await deferred.promise
+    let chunkHash = sha256x2(new Buffer(headers.join(''), 'hex'))
+    if (chunkHash !== await this._storage.getChunkHash(headerChunkIndex)) {
+      throw new errors.Blockchain.VerifyChunkError(headerChunkIndex, 'wrong hash')
+    }
 
-        self._chunkCache.set(headerChunkIndex, promise)
-      }
-
-      return self._chunkCache.get(headerChunkIndex)
-    })
-    .then(function (rawChunk) {
-      var rawHeader = rawChunk.slice(headerIndex * 80, (headerIndex + 1) * 80)
-      return rawHeader.toString('hex')
-    })
-  })
-  .then(function (hexHeader) {
-    var rawHeader = new Buffer(hexHeader, 'hex')
-    return _.extend(util.buffer2header(rawHeader), {
-      height: height,
-      hash: util.hashEncode(util.sha256x2(rawHeader))
-    })
-  })
-  .catch(errors.Connector.HeaderNotFound, self._rethrow)
-}
-
-/**
- * @param {string} txid
- * @return {Promise<string>}
- */
-Verified.prototype.getTx = function (txid) {
-  var self = this
-
-  if (!self._txCache.has(txid) || self._txCache.get(txid).isRejected()) {
-    var promise = self.connector.getTx(txid)
-      .catch(errors.Connector.TxNotFound, self._rethrow)
-
-    self._txCache.set(txid, promise)
+    return headers[headerIndex]
   }
 
-  return self._txCache.get(txid)
-}
-
-/**
- * @param {string} txid
- * @return {Promise<Blockchain~TxBlockHashObject>}
- */
-Verified.prototype.getTxBlockHash = function (txid) {
-  var self = this
-  return self.connector.getTxMerkle(txid)
-    .then(function (obj) {
-      if (obj.source !== 'blocks') {
-        return obj
+  /**
+   * @param {(number|string)} id
+   * @return {Promise<Network~HeaderObject>}
+   */
+  async getHeader (id) {
+    if (_.isNumber(id)) {
+      if (id > this._latest.height) {
+        throw new errors.Blockchain.VerifyHeaderError(id, `hasn't been imported yet`)
       }
 
-      // get header and compare merkle root
-      return self.getHeader(obj.block.hash)
-        .then(function (header) {
-          // calculate merkle root from merkle tree and tx index
-          var merkleHash = util.hashDecode(txid)
-          obj.block.merkle.forEach(function (txid, i) {
-            var items
-            if ((obj.block.index >> i) & 1) {
-              items = [util.hashDecode(txid), merkleHash]
-            } else {
-              items = [merkleHash, util.hashDecode(txid)]
-            }
+      let headerHex = await this._getHeaderByHeight(id)
+      let rawHeader = new Buffer(headerHex, 'hex')
+      return _.extend(buffer2header(rawHeader), {
+        height: id,
+        hash: hashEncode(sha256x2(rawHeader))
+      })
+    }
 
-            merkleHash = util.sha256x2(Buffer.concat(items))
-          })
+    let header = await this._network.getHeader(id)
+    let header2 = await this.getHeader(header.height)
+    if (header.hash !== header2.hash) {
+      throw new errors.Blockchain.VerifyHeaderError(id, `hashes don't match`)
+    }
 
-          if (header.hashMerkleRoot !== util.hashEncode(merkleHash)) {
-            throw new errors.Blockchain.VerifyTxError(txid, 'merkleroot not matched')
-          }
+    return header2
+  }
 
-          delete obj.block.index
-          delete obj.block.merkle
-          return obj
-        })
+  /**
+   * @param {string} txId
+   * @return {Promise<?{hash: string, height: number}>}
+   */
+  async getTxBlockInfo (txId) {
+    let info = await this._network.getTxMerkle(txId)
+    if (info === null) {
+      return null
+    }
+
+    let header = await this.getHeader(info.hash)
+    if (header.hashMerkleRoot !== getTxMerkle(txId, {txIndex: info.index, sibling: info.merkle})) {
+      throw new errors.Blockchain.VerifyTxError(txId, 'merkleroot not matched')
+    }
+
+    return {hash: info.hash, height: info.height}
+  }
+
+  /**
+   * @param {string[]} addresses
+   * @param {Object} [opts]
+   * @param {(string|number)} [opts.from]
+   * @param {(string|number)} [opts.to]
+   * @param {boolean} [opts.unspent=false]
+   * @return {Promise<Network~AddressesQueryObject>}
+   */
+  async addressesQuery (addresses, opts) {
+    let result = await this._network.addressesQuery(addresses, opts)
+    await* result.data.map(async (obj) => {
+      if (obj.height !== null) {
+        let txBlockInfo = await this.getTxBlockInfo(obj.txId)
+        if (txBlockInfo === null || txBlockInfo.height !== obj.height) {
+          let msg = `from addressesQuery with addresses: ${addresses}, opts: ${JSON.stringify(opts)}`
+          throw new errors.Blockchain.VerifyTxError(obj.txId, msg)
+        }
+      }
     })
-    .catch(errors.Connector.TxNotFound, self._rethrow)
-}
 
-/**
- * @param {string} txHex
- * @return {Promise<string>}
- */
-Verified.prototype.sendTx = function (txHex) {
-  return this.connector.sendTx(txHex)
-    .catch(errors.Connector.TxSendError, this._rethrow)
+    return result
+  }
 }
-
-/**
- * @param {string[]} addresses
- * @param {Object} [opts]
- * @param {string} [opts.source] `blocks` or `mempool`
- * @param {(string|number)} [opts.from] `hash` or `height`
- * @param {(string|number)} [opts.to] `hash` or `height`
- * @param {string} [opts.status]
- * @return {Promise<Connector~AddressesQueryObject>}
- */
-Verified.prototype.addressesQuery = function (addresses, opts) {
-  return this.connector.addressesQuery(addresses, opts)
-    .catch(errors.Connector.HeaderNotFound, this._rethrow)
-}
-
-/**
- * @param {string} address
- * @return {Promise}
- */
-Verified.prototype.subscribeAddress = function (address) {
-  return this.connector.subscribe({event: 'touchAddress', address: address})
-}
-
-module.exports = Verified

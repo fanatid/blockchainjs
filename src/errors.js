@@ -2,10 +2,7 @@
  * Error
  *  +-- BlockchainJS
  *       +-- Blockchain
- *       |    +-- HeaderNotFound
- *       |    +-- InconsistentSnapshot
- *       |    +-- TxNotFound
- *       |    +-- TxSendError
+ *       |    +-- VerifyBlockchainError
  *       |    +-- VerifyChunkError
  *       |    +-- VerifyHeaderError
  *       |    +-- VerifyTxError
@@ -22,8 +19,6 @@
  *       |    +-- TxSendError
  *       |    +-- SubscribeError
  *       |    +-- Unreachable
- *       |    +-- UnsubscribeError
- *       +-- NetworkNameMatchError
  *       +-- NotImplemented
  *       +-- Storage
  *            +-- CompactMode
@@ -42,17 +37,8 @@ let spec = {
     name: 'Blockchain',
     message: 'Internal error on Blockchain {0}',
     errors: [{
-      name: 'HeaderNotFound',
-      message: 'Header not found ({0})'
-    }, {
-      name: 'InconsistentSnapshot',
-      message: 'Snapshot is no longer valid (hash {0}, blockchain hash {1})'
-    }, {
-      name: 'TxNotFound',
-      message: 'Transaction not found ({0})'
-    }, {
-      name: 'TxSendError',
-      message: 'Can\'t send transaction: {0}'
+      name: 'VerifyBlockchainError',
+      message: 'Blockchain latest: {0}'
     }, {
       name: 'VerifyChunkError',
       message: 'Chunk #{0} ({1})'
@@ -103,13 +89,7 @@ let spec = {
     }, {
       name: 'Unreachable',
       message: 'Service {0} is unreachable.'
-    }, {
-      name: 'UnsubscribeError',
-      message: '{0}'
     }]
-  }, {
-    name: 'NetworkNameMatchError',
-    message: 'Network name {0} don\'t match with {1}'
   }, {
     name: 'NotImplemented',
     message: 'Function {0} was not implemented yet'

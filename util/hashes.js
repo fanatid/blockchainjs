@@ -25,7 +25,7 @@ let URL = process.env.CHROMANODE_URL || Chromanode.getSources(networkName)[0]
 console.log(`URL: ${URL}`)
 
 // start
-let network = new Chromanode({url: URL, concurrency: 3})
+let network = new Chromanode({url: URL, concurrency: 5})
 network.on('error', err => console.error(err.stack))
 network.on('connect', async () => {
   console.log('Connected!')

@@ -16,8 +16,8 @@ blockchainjs.storage = require('./storage')
 
 // chunk hashes
 blockchainjs.chunkHashes = {}
-// blockchainjs.chunkHashes.livenet = require('./chunkhashes/livenet')
-// blockchainjs.chunkHashes.testnet = require('./chunkhashes/testnet')
+blockchainjs.chunkHashes.livenet = require('./chunkhashes/livenet')
+blockchainjs.chunkHashes.testnet = require('./chunkhashes/testnet')
 
 // blockchain
 blockchainjs.blockchain = {}

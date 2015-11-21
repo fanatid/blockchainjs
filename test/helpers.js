@@ -1,10 +1,7 @@
 import _ from 'lodash'
-import { createHash } from 'crypto'
 import bitcore from 'bitcore-lib'
 import request from 'request'
 import io from 'socket.io-client'
-
-const TEST_CHANGE = process.env.TEST_CHANGE || '2MvynpNLGuxgHSWd7EdX94ZTcZSZ5iM2Uo1'
 
 /**
  * @return {Promise<bitcore.Transaction>}
@@ -33,7 +30,7 @@ async function createTx () {
 
   return new bitcore.Transaction()
     .from(data.unspent)
-    .change(TEST_CHANGE)
+    .change(bitcore.PrivateKey.fromRandom('testnet').toAddress().toString())
     .sign(data.privateKeyWIF)
 }
 

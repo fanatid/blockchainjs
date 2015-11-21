@@ -1,94 +1,66 @@
-#!/usr/bin/env node
-'use strict'
+import { writeFileSync } from 'fs'
+import _ from 'lodash'
+import ProgressBar from 'progress'
+import bitcore from 'bitcore-lib'
 
-var fs = require('fs')
+import Chromanode from '../src/network/chromanode'
+import { sha256x2, hashEncode } from '../src/util/crypto'
 
-var _ = require('lodash')
-var ProgressBar = require('progress')
-var Promise = require('bluebird')
-
-var blockchainjs = require('../')
-var Chromanode = blockchainjs.connector.Chromanode
-var util = blockchainjs.util
-
-var optimist = require('optimist')
-  .usage('Usage: $0 [-h] [-n NETWORK]')
-  .options('n', {
-    alias: 'network',
-    describe: 'cryptocurrency network',
-    default: 'livenet'
-  })
-  .check(function (argv) {
-    var availableNetworks = [
-      'livenet',
-      'testnet'
-    ]
-
-    if (availableNetworks.indexOf(argv.network) === -1) {
-      var msg = 'Network ' + argv.network + ' not allowed. You can use only: ' + availableNetworks.join(', ')
-      throw new Error(msg)
-    }
-  })
-  .options('o', {
-    alias: 'out',
-    describe: 'outpuf js file'
-  })
-  .check(function (argv) {
-    if (/\.js$/.test(argv.out) === false) {
-      throw new Error('Output file must have js extension')
-    }
-
-    fs.writeFileSync(argv.out, '')
-  })
-  .options('h', {
-    alias: 'help',
-    describe: 'show this help',
-    default: false
-  })
-
-var argv = optimist.argv
-if (argv.help) {
-  optimist.showHelp()
-  process.exit(0)
+// network
+let networkName = process.env.NETWORK || 'livenet'
+let networkObj = bitcore.Networks.get(networkName)
+if (networkObj === undefined || networkObj.name !== networkName) {
+  throw new Error(`Network ${networkName} not allowed.`)
 }
 
-var connector = new Chromanode({networkName: argv.network, requestTimeout: 30000})
-new Promise(function (resolve) { connector.once('connect', resolve) })
-.then(function () { return connector.getHeader('latest') })
-.then(function (header) {
-  var height = header.height
-  var chunksTotal = Math.floor(height / 2016)
-  var barFmt = 'Progress: :percent (:current/:total), :elapseds elapsed, eta :etas'
-  var bar = new ProgressBar(barFmt, {total: chunksTotal})
+// output
+let output = process.env.OUTPUT
+if (/\.js$/.test(output) === false) {
+  throw new Error('Output file must have js extension')
+}
+writeFileSync(output, '')
 
-  var lastBlockHash
-  Promise.map(_.range(chunksTotal), function (chunkIndex) {
-    return connector.headersQuery(chunkIndex * 2016, {count: 2016})
-      .then(function (result) {
-        var rawChunk = new Buffer(result.headers, 'hex')
+// chromanode url
+let URL = process.env.CHROMANODE_URL || Chromanode.getSources(networkName)[0]
+console.log(`URL: ${URL}`)
 
-        if (chunkIndex === chunksTotal - 1) {
-          lastBlockHash = util.hashEncode(util.sha256x2(rawChunk.slice(-80)))
-        }
+// start
+let network = new Chromanode({url: URL, concurrency: 3})
+network.on('error', err => console.error(err.stack))
+network.on('connect', async () => {
+  console.log('Connected!')
 
-        bar.tick()
-        return util.hashEncode(util.sha256x2(rawChunk))
-      })
-  }, {concurrency: 3})
-  .finally(function () {
-    connector.disconnect()
-  })
-  .then(function (hashes) {
-    var data = {lastBlockHash: lastBlockHash, chunkHashes: hashes}
-    var content = [
-      '// Network: ' + argv.network,
-      '// ' + new Date().toUTCString(),
-      'module.exports = ' + JSON.stringify(data, null, 2).replace(/"/g, '\'')
-    ].join('\n') + '\n'
+  try {
+    let latest = await network.getHeader('latest')
+    let chunksTotal = Math.floor(latest.height / 2016)
 
-    fs.writeFileSync(argv.out, content)
+    let bar = new ProgressBar(
+      'Progress: :percent (:current/:total), :elapseds elapsed, eta :etas',
+      {total: chunksTotal})
+
+    let data = {lastBlockHash: null}
+    data.hashes = await* _.range(chunksTotal).map(async (chunkIndex) => {
+      let headers = await network.getHeaders(chunkIndex === 0 ? null : (chunkIndex * 2016 - 1))
+
+      if (chunkIndex + 1 === chunksTotal) {
+        data.lastBlockHash = hashEncode(sha256x2(new Buffer(headers.slice(-160), 'hex')))
+      }
+
+      bar.tick()
+      return sha256x2(new Buffer(headers, 'hex')).toString('hex')
+    })
+
+    network.disconnect()
+
+    writeFileSync(output, `// Network: ${networkName}
+// ${new Date().toUTCString()}
+module.exports = ${JSON.stringify(data, null, 2).replace(/"/g, '\'')}
+`)
+
     process.exit(0)
-  })
+  } catch (err) {
+    console.error(err.stack)
+    process.exit(1)
+  }
 })
-
-connector.connect()
+network.connect()

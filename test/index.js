@@ -24,5 +24,5 @@ describe('blockchainjs', () => {
   // blockchain
   require('./blockchain/blockchain')
   require('./blockchain/naive')
-  require('./blockchain/verified')
+  // require('./blockchain/verified')
 })

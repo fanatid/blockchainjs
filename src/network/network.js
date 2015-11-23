@@ -80,6 +80,7 @@ import errors from '../errors'
  */
 export default class Network extends EventEmitter {
   /*
+   * @constructor
    * @param {Object} [opts]
    * @param {number} [opts.concurrency=Infinity]
    */

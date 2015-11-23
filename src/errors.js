@@ -13,21 +13,15 @@
  *       |    +-- ConnectionError
  *       |    +-- ConnectionTimeout
  *       |    +-- HeaderNotFound
- *       |    +-- NotConnected
  *       |    +-- RequestError
  *       |    +-- TxNotFound
  *       |    +-- TxSendError
  *       |    +-- SubscribeError
- *       |    +-- Unreachable
  *       +-- NotImplemented
  *       +-- Storage
  *            +-- CompactMode
- *            |    +-- Forbidden
- *            |    +-- Limitation
- *            +-- FullMode
- *            |    +-- NotSupported
- *            +-- LoadError
- *            +-- NotAvailable
+ *                 +-- Forbidden
+ *                 +-- Limitation
  */
 
 let spec = {
@@ -72,9 +66,6 @@ let spec = {
       name: 'HeaderNotFound',
       message: 'Header not found ({0})'
     }, {
-      name: 'NotConnected',
-      message: 'Not connected to server (network: {0}, url: {1})'
-    }, {
       name: 'RequestError',
       message: 'Request HTTP error (network: {0}, code: {1}, url: {2})'
     }, {
@@ -86,9 +77,6 @@ let spec = {
     }, {
       name: 'SubscribeError',
       message: '{0}'
-    }, {
-      name: 'Unreachable',
-      message: 'Service {0} is unreachable.'
     }]
   }, {
     name: 'NotImplemented',
@@ -106,19 +94,6 @@ let spec = {
         name: 'Limitation',
         message: 'CompactMode limitation: {0}'
       }]
-    }, {
-      name: 'FullMode',
-      message: 'Internal error on FullMode {0}',
-      errors: [{
-        name: 'NotSupported',
-        message: 'FullMode not supported.'
-      }]
-    }, {
-      name: 'LoadError',
-      message: '{0}'
-    }, {
-      name: 'NotAvailable',
-      message: '{0} storage not available'
     }]
   }]
 }

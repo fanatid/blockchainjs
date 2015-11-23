@@ -38,12 +38,12 @@ network.on('connect', async () => {
       'Progress: :percent (:current/:total), :elapseds elapsed, eta :etas',
       {total: chunksTotal})
 
-    let data = {lastBlockHash: null}
+    let data = {latest: null}
     data.hashes = await* _.range(chunksTotal).map(async (chunkIndex) => {
       let headers = await network.getHeaders(chunkIndex === 0 ? null : (chunkIndex * 2016 - 1))
 
       if (chunkIndex + 1 === chunksTotal) {
-        data.lastBlockHash = hashEncode(sha256x2(new Buffer(headers.slice(-160), 'hex')))
+        data.latest = hashEncode(sha256x2(new Buffer(headers.slice(-160), 'hex')))
       }
 
       bar.tick()

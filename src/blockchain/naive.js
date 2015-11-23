@@ -27,7 +27,8 @@ export default class Naive extends Blockchain {
     let savedLatest = this.latest
     try {
       await this._withSync(async () => {
-        this._latest = await this._network.getHeader('latest')
+        let obj = await this._network.getHeader('latest')
+        this._latest = {hash: obj.hash, height: obj.height}
       })
     } catch (err) {
       this.emit('error', err)

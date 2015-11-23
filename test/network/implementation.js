@@ -24,7 +24,7 @@ module.exports = function (opts) {
   console.log(`${opts.clsName} URL is ${clsOpts.url}`)
 
   ndescribe(opts.clsName, function () {
-    this.timeout(60 * 1000)
+    this.timeout(90 * 1000)
 
     let network
 
@@ -191,9 +191,7 @@ module.exports = function (opts) {
       let result = await network.addressesQuery(fixture.addresses, fixture.opts)
       expect(result).to.be.an('object')
       expect(result.data).to.deep.equal(fixture.data)
-      expect(result.latest).to.be.an('object')
-      expect(result.latest.height).to.be.at.least(600000)
-      expect(result.latest.hash).to.have.length(64)
+      expect(result.latest).to.deep.equal(await helpers.getLatest(network))
     })
 
     it('addressesQuery (unspent)', async () => {
@@ -201,9 +199,7 @@ module.exports = function (opts) {
       let result = await network.addressesQuery(fixture.addresses, fixture.opts)
       expect(result).to.be.an('object')
       expect(result.data).to.deep.equal(fixture.data)
-      expect(result.latest).to.be.an('object')
-      expect(result.latest.height).to.be.at.least(600000)
-      expect(result.latest.hash).to.have.length(64)
+      expect(result.latest).to.deep.equal(await helpers.getLatest(network))
     })
 
     it('subscribe on newBlocks', () => {

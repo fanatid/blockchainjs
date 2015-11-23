@@ -21,8 +21,7 @@ import errors from '../errors'
  *       use block hashes from chunk and save it in memory if you needed this
  *  besides you can use pre-saved chunk hashes,
  *   it's saved traffic and accelerate blockchain initialization
- *   pre-saved data has next structure:
- *    {lastHash: string, chunkHashes: string[]}
+ *   pre-saved data has next structure: {latest: string, hashes: string[]}
  *
  * All methods return Promise,
  *  this is done for asynchronous storages such as: SQLite, WebSQL

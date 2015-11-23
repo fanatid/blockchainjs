@@ -2,11 +2,12 @@ import _ from 'lodash'
 import LRU from 'lru-cache'
 import makeConcurrent from 'make-concurrent'
 import spvUtils from 'bitcoin-spv-utils'
-import getTxMerkle from 'bitcoin-proof'
+import { getTxMerkle } from 'bitcoin-proof'
 
 import Blockchain from './blockchain'
-import { buffer2header } from '../util/header'
-import { sha256x2, hashEncode } from '../util/crypto'
+import { buffer2header, header2buffer } from '../util/header'
+import { sha256x2, hashEncode, hashDecode } from '../util/crypto'
+import { ZERO_HASH } from '../util/const'
 import errors from '../errors'
 
 /**
@@ -38,7 +39,7 @@ export default class Verified extends Blockchain {
       compact: false,
       chunkCacheSize: 4,
       chunkHashes: null
-    })
+    }, opts)
 
     // check that storage has same compact mode
     this._storage = opts.storage
@@ -58,7 +59,7 @@ export default class Verified extends Blockchain {
       await this._bootstrap(opts.chunkHashes)
       this._networkStart()
     })
-    .catch(this.emit.bind('error'))
+    .catch(this.emit.bind(this, 'error'))
   }
 
   /**
@@ -70,8 +71,8 @@ export default class Verified extends Blockchain {
       let chunkHashesCount = await this._storage.getChunkHashesCount()
       let headersCount = await this._storage.getHeadersCount()
       if (chunkHashesCount === 0 && headersCount === 0 && chunkHashes !== null) {
-        await this._storage.setLastHash(chunkHashes.lastBlockHash)
-        await this._storage.putChunkHashes(chunkHashes.chunkHashes)
+        await this._storage.setLastHash(chunkHashes.latest)
+        await this._storage.putChunkHashes(chunkHashes.hashes)
       }
 
       chunkHashesCount = await this._storage.getChunkHashesCount()
@@ -107,30 +108,25 @@ export default class Verified extends Blockchain {
         }
 
         let networkIndex = Math.floor(latestNetwork.height / 2016)
-
-        let currentIndex
-        function updateCurrentIndex () {
-          currentIndex = Math.floor(this._latest.height / 2016)
-
-          // invalidate chunk cache
-          for (let i = Math.min(networkIndex, currentIndex), m = Math.max(networkIndex, currentIndex); i < m; ++i) {
+        let invalidateChunkCache = () => {
+          let cIndex = Math.floor(this._latest.height / 2016)
+          for (let i = Math.min(cIndex, networkIndex), s = Math.max(cIndex, networkIndex); i < s; ++i) {
             this._chunkCache.del(i)
           }
         }
-        updateCurrentIndex()
 
         // reorg precheck (save traffic)
         if (this._latest.height >= latestNetwork.height) {
           await this._reorgHandler()
-          updateCurrentIndex()
+          invalidateChunkCache()
         }
 
         // sync with headers
         if (latestNetwork.height - this._latest.height < 50) {
           let headers = await this._getHeadersChain(this._latest.height)
-          if (this._latest.hash !== headers[0].slice(8, 72)) {
+          if (hashDecode(this._latest.hash).toString('hex') !== headers[0].slice(8, 72)) {
             await this._reorgHandler()
-            updateCurrentIndex()
+            invalidateChunkCache()
             headers = await this._getHeadersChain(this._latest.height)
           }
 
@@ -140,18 +136,34 @@ export default class Verified extends Blockchain {
         }
 
         // sync with chunks
-        while (currentIndex <= networkIndex) {
-          let headers = await this._getHeadersChunk(currentIndex)
-          if (this._latest.hash !== headers[0].slice(8, 72)) {
+        while (Math.floor((this._latest.height + 1) / 2016) <= networkIndex) {
+          let currentIndex = Math.floor((this._latest.height + 1) / 2016)
+          let fullChunk = await this._getHeadersChunk(currentIndex)
+
+          let headers = _.clone(fullChunk)
+          if (this._latest.height % 2016 !== 2015) {
+            headers.splice(0, this._latest.height % 2016 + 1)
+          }
+          if (headers.length === 0) {
+            return
+          }
+
+          if (hashDecode(this._latest.hash).toString('hex') !== headers[0].slice(8, 72)) {
             await this._reorgHandler()
-            updateCurrentIndex()
+            invalidateChunkCache()
             continue
           }
 
           await this._verifyHeaders(headers)
           await this._saveHeaders(headers)
-          this._chunkCache.set(currentIndex, {promise: Promise.resolve(headers), isRejected: false})
-          currentIndex += 1
+          if (fullChunk.length === 2016) {
+            this._chunkCache.set(currentIndex, {promise: Promise.resolve(fullChunk), isRejected: false})
+          }
+
+          if (this._latest.hash !== savedLatestHash) {
+            savedLatestHash = this._latest.hash
+            this.emit('newBlock', this.latest) // emit with clone of _latest
+          }
         }
       })
     } catch (err) {
@@ -166,11 +178,11 @@ export default class Verified extends Blockchain {
   /**
    * @private
    * @param {number} height
+   * @param {number} [to]
    * @return {Promise<string[]>}
    */
-  async _getHeadersChain (height) {
-    let opts = {height: height >= 0 ? height : null}
-    let headers = await this._network.getHeaders(opts)
+  async _getHeadersChain (height, to) {
+    let headers = await this._network.getHeaders(height >= 0 ? height : null, to)
 
     return _.range(0, headers.length, 160).map((offset) => {
       return headers.slice(offset, offset + 160)
@@ -183,7 +195,7 @@ export default class Verified extends Blockchain {
    * @return {Promise<string[]>}
    */
   _getHeadersChunk (index) {
-    return this._getHeadersChain(index * 2016 - 1)
+    return this._getHeadersChain(index * 2016 - 1, index * 2016 + 2015)
   }
 
   /**
@@ -194,20 +206,34 @@ export default class Verified extends Blockchain {
   async _verifyHeaders (headers) {
     let [previousHeader, target] = [null, spvUtils.getMaxTarget()]
 
-    let chunkIndex = Math.floor(this._latest.height / 2016)
-    if (chunkIndex !== 0) {
-      previousHeader = await this.getHeader(this._latest.height - 1)
+    let height = this._latest.height
+    while (headers.length !== 0) {
+      let chunkIndex = Math.floor(height / 2016)
+      let count = Math.min(2015 - height % 2016, headers.length)
+      if (height % 2016 === 2015) {
+        chunkIndex += 1
+        count = Math.min(2016, headers.length)
+      }
 
-      let [first, last] = await* [
-        this.getHeader((chunkIndex - 1) * 2016),
-        this.getHeader(chunkIndex * 2016 - 1)
-      ]
-      target = spvUtils.getTarget(first, last)
-    }
+      if (height > -1) {
+        previousHeader = header2buffer(await this.getHeader(height))
+      }
 
-    let rawHeaders = headers.map(header => new Buffer(header, 'hex'))
-    if (!spvUtils.verifyHeaders(rawHeaders, previousHeader, target, this._testnet)) {
-      throw new errors.Blockchain.VerifyBlockchainError(JSON.stringify(this._latest))
+      if (chunkIndex > 0) {
+        let [first, last] = await* [
+          this.getHeader((chunkIndex - 1) * 2016),
+          this.getHeader(chunkIndex * 2016 - 1)
+        ]
+        target = spvUtils.getTarget(header2buffer(first), header2buffer(last))
+      }
+
+      let rawHeaders = headers.slice(0, count).map(header => new Buffer(header, 'hex'))
+      if (!spvUtils.verifyHeaders(rawHeaders, previousHeader, target, this._testnet)) {
+        throw new errors.Blockchain.VerifyBlockchainError(`height = ${height}`)
+      }
+
+      headers = headers.slice(count)
+      height += count
     }
   }
 
@@ -222,9 +248,9 @@ export default class Verified extends Blockchain {
       height: this._latest.height + headers.length
     }
 
-    // full mode or same chunk (but not more than 2015 headers)
-    if (this._storage.compact === false ||
-        await this._storage.getChunkHashesCount() === Math.floor((latestNew.height + 1) / 2016)) {
+    // full mode or not more than 2015 headers
+    let headersCount = await this._storage.getHeadersCount()
+    if (this._storage.compact === false || headersCount + headers.length < 2016) {
       await* [
         this._storage.putHeaders(headers),
         this._storage.setLastHash(latestNew.hash)
@@ -234,17 +260,17 @@ export default class Verified extends Blockchain {
     }
 
     // get saved headers and fill to full chunk
-    let savedHeaders = await _.range(await this._storage.getHeadersCount()).map((index) => {
+    let fullChunk = await* _.range(headersCount).map((index) => {
       return this._storage.getHeader(index)
     })
 
-    while (savedHeaders.length !== 2016) {
-      savedHeaders.push(headers.shift())
+    while (fullChunk.length !== 2016) {
+      fullChunk.push(headers.shift())
     }
 
     // put chunk hash, truncate headers and set latest hash
-    let chunkHash = sha256x2(new Buffer(savedHeaders.join(''), 'hex'))
-    let latestHash = hashEncode(sha256x2(new Buffer(_.last(savedHeaders), 'hex')))
+    let chunkHash = sha256x2(new Buffer(fullChunk.join(''), 'hex')).toString('hex')
+    let latestHash = hashEncode(sha256x2(new Buffer(_.last(fullChunk), 'hex')))
     await* [
       this._storage.putChunkHashes([chunkHash]),
       this._storage.truncateHeaders(0),
@@ -253,10 +279,12 @@ export default class Verified extends Blockchain {
 
     this._latest = {
       hash: latestHash,
-      height: (Math.floor(this._latest.height / 2016) + 1) * 2016 - 1
+      height: (await this._storage.getChunkHashesCount()) * 2016 - 1
     }
 
-    return await this._saveHeaders(headers)
+    if (headers.length > 0) {
+      return await this._saveHeaders(headers)
+    }
   }
 
   /**
@@ -297,12 +325,18 @@ export default class Verified extends Blockchain {
     }
 
     // compact mode
+    let latest = this._latest
     let chunkIndex = await this._storage.getChunkHashesCount() - 1
     while (true) {
+      if (chunkIndex === -1) {
+        latest = {hash: ZERO_HASH, height: -1}
+        break
+      }
+
       let headers = await this._getHeadersChunk(chunkIndex)
       let chunkHash = sha256x2(new Buffer(headers.join(''), 'hex'))
       if (chunkHash === await this._storage.getChunkHash(chunkIndex)) {
-        this._latest = {
+        latest = {
           hash: hashEncode(sha256x2(new Buffer(_.last(headers), 'hex'))),
           height: chunkIndex * 2016 - 1
         }
@@ -313,6 +347,7 @@ export default class Verified extends Blockchain {
       chunkIndex -= 1
     }
 
+    this._latest = latest
     await* [
       this._storage.truncateHeaders(0),
       this._storage.truncateChunkHashes(chunkIndex + 1),
@@ -352,7 +387,7 @@ export default class Verified extends Blockchain {
     }
 
     let headers = await deferred.promise
-    let chunkHash = sha256x2(new Buffer(headers.join(''), 'hex'))
+    let chunkHash = sha256x2(new Buffer(headers.join(''), 'hex')).toString('hex')
     if (chunkHash !== await this._storage.getChunkHash(headerChunkIndex)) {
       throw new errors.Blockchain.VerifyChunkError(headerChunkIndex, 'wrong hash')
     }
@@ -367,6 +402,7 @@ export default class Verified extends Blockchain {
   async getHeader (id) {
     if (_.isNumber(id)) {
       if (id > this._latest.height) {
+        await this._network.getHeader(id) // Network.HeaderNotFound check
         throw new errors.Blockchain.VerifyHeaderError(id, `hasn't been imported yet`)
       }
 

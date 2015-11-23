@@ -25,6 +25,10 @@ describe('blockchain.Blockchain', () => {
     expect(blockchain).to.be.instanceof(EventEmitter)
   })
 
+  it('network', () => {
+    expect(blockchain.network).to.equal(network)
+  })
+
   it('latest', () => {
     expect(blockchain.latest).to.deep.equal({hash: ZERO_HASH, height: -1})
   })

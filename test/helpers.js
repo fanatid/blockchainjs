@@ -110,8 +110,18 @@ async function getUnconfirmedTxId () {
   return _.find(lastUnconfirmedTxIds, lastUnconfirmedTxIdsPredicate).txId
 }
 
+/**
+ * @param {Network} network
+ * @return {{hash: string, height: number}}
+ */
+async function getLatest (network) {
+  let obj = await network.getHeader('latest')
+  return {hash: obj.hash, height: obj.height}
+}
+
 export default {
   ZERO_HASH: new Array(65).join('0'),
   createTx: createTx,
-  getUnconfirmedTxId: getUnconfirmedTxId
+  getUnconfirmedTxId: getUnconfirmedTxId,
+  getLatest: getLatest
 }

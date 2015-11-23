@@ -1,303 +1,222 @@
-'use strict'
+import _ from 'lodash'
+import { expect } from 'chai'
+import { randomBytes as getRandomBytes } from 'crypto'
+import ProgressBar from 'progress'
 
-var _ = require('lodash')
-var expect = require('chai').expect
-var crypto = require('crypto')
-var ProgressBar = require('progress')
-var bitcoin = require('bitcoinjs-lib')
-var Promise = require('bluebird')
+import blockchainjs from '../../src'
 
-var blockchainjs = require('../../src')
-var helpers = require('../helpers')
-var fixtures = require('../fixtures/network.json')
+describe('blockchain.Verified', function () {
+  this.timeout(90 * 1000)
 
-describe.skip('blockchain.Verified', function () {
-  var connector
-  var storage
-  var blockchain
-  var timeoutId
+  let progressStream = process.stderr
+  if (typeof window !== 'undefined') {
+    progressStream = {
+      isTTY: true,
+      columns: 100,
+      clearLine: () => {},
+      cursorTo: () => {},
+      write: ::console.log
+    }
+  }
 
   /**
-   * @param {function} Storage
+   * @param {function} StorageCls
    * @param {Object} storageOpts
    * @param {Object} blockchainOpts
    * @param {Object} opts
    * @return {function}
    */
-  function createBeforeEachFunction (Storage, storageOpts, blockchainOpts, opts) {
-    return function (done) {
-      connector = new blockchainjs.connector.Chromanode({networkName: 'testnet'})
-      connector.on('error', helpers.ignoreConnectorErrors)
+  function getBefore (StorageCls, storageOpts, blockchainOpts, fnOpts) {
+    return (opts) => {
+      opts.storage = new StorageCls(storageOpts)
 
-      storage = new Storage(storageOpts)
+      let url = process.env.CHROMANODE_URL || blockchainjs.network.Chromanode.getSources('testnet')[0]
+      let network = opts.network = new blockchainjs.network.Chromanode({url: url})
 
       blockchainOpts = _.extend({
-        storage: storage,
-        networkName: 'testnet',
+        storage: opts.storage,
         testnet: true
       }, blockchainOpts)
-      blockchain = new blockchainjs.blockchain.Verified(connector, blockchainOpts)
-      blockchain.on('error', helpers.ignoreConnectorErrors)
+      let blockchain = opts.blockchain = new blockchainjs.blockchain.Verified(network, blockchainOpts)
 
-      // for using syncThroughHeaders in syncing process
-      var getHeader = Object.getPrototypeOf(connector).getHeader
-      connector.getHeader = function (id) {
+      let getHeader = Object.getPrototypeOf(network).getHeader
+      let getHeaders = Object.getPrototypeOf(network).getHeaders
+      let addressesQuery = Object.getPrototypeOf(network).addressesQuery
+
+      network.getHeader = async (id) => {
         if (id !== 'latest') {
-          return getHeader.call(connector, id)
+          return getHeader.call(network, id)
         }
 
-        if (!opts.fullChain) {
-          return getHeader.call(connector, 30010)
+        if (fnOpts.fullChain) {
+          let latest = await getHeader.call(network, 'latest')
+          return await getHeader.call(network, latest.height - 10)
         }
 
-        return getHeader.call(connector, 'latest')
-          .then(function (lastHeader) {
-            return getHeader.call(connector, lastHeader.height - 10)
-          })
+        return await getHeader.call(network, 30235)
       }
 
-      timeoutId = setTimeout(function () {
-        connector.getHeader = getHeader.bind(connector)
+      network.getHeaders = async (from, to) => {
+        if (!_.isString(to)) {
+          let latest = await network.getHeader('latest')
+          to = to === undefined ? latest.height : Math.min(to, latest.height)
+        }
 
-        if (!opts.fullChain) {
-          connector.getHeader = function (id) {
+        return await await getHeaders.call(network, from, to)
+      }
+
+      network.addressesQuery = async function () {
+        let [result, latest] = await* [
+          addressesQuery.apply(network, arguments),
+          network.getHeader('latest')
+        ]
+        result.latest = {hash: latest.hash, height: latest.height}
+        return result
+      }
+
+      let cancelled = false
+      blockchain.on('newBlock', async (payload) => {
+        if (payload.height < 10000 || cancelled) {
+          return
+        }
+
+        if (fnOpts.fullChain) {
+          network.getHeader = getHeader.bind(network)
+        } else {
+          network.getHeader = (id) => {
             if (id !== 'latest') {
-              return getHeader.call(connector, id)
+              return getHeader.call(network, id)
             }
 
-            return getHeader.call(connector, 30020)
+            return getHeader.call(network, 30245)
           }
         }
 
-        connector.getHeader('latest')
-          .then(function (header) {
-            connector.emit('newBlock', header.hash, header.height)
-          }, _.noop)
-      }, 2500)
+        let latest = await network.getHeader('latest')
+        network.emit('newBlock', {hash: latest.hash, height: latest.height})
 
-      connector.once('connect', done)
-      connector.connect()
-    }
-  }
+        console.log('\nReturn original getHeader in network')
+        cancelled = true
+      })
 
-  afterEach(function (done) {
-    clearTimeout(timeoutId)
-    connector.once('disconnect', function () {
-      connector.removeAllListeners()
-      connector.on('error', function () {})
+      return new Promise((resolve, reject) => {
+        network.once('error', reject)
+        blockchain.once('error', reject)
+        network.once('connect', async () => {
+          try {
+            let latest = await network.getHeader('latest')
 
-      blockchain.removeAllListeners()
-      blockchain.on('error', function () {})
+            let bar = new ProgressBar(
+              'Syncing: :percent (:current/:total), :elapseds elapsed, eta :etas',
+              {total: latest.height, stream: progressStream})
 
-      connector = null
-      storage = null
-      blockchain = null
+            network.on('newBlock', payload => bar.total = payload.height)
 
-      done()
-    })
-    connector.disconnect()
-  })
+            blockchain.on('newBlock', payload => bar.tick(payload.height - bar.curr))
+            if (blockchain.latest.height !== -1) {
+              bar.tick(blockchain.latest.height)
+            }
 
-  function runTests () {
-    it.skip('inherits Blockchain', function () {
-      expect(blockchain).to.be.instanceof(blockchainjs.blockchain.Blockchain)
-      expect(blockchain).to.be.instanceof(blockchainjs.blockchain.Verified)
-    })
-
-    it.skip('wait syncStop / getHeader / getTxBlockHash', function (done) {
-      var barFmt = 'Syncing: :percent (:current/:total), :elapseds elapsed, eta :etas'
-      var stream = process.stderr
-      if (typeof window !== 'undefined') {
-        stream = {
-          isTTY: true,
-          columns: 100,
-          clearLine: function () {},
-          cursorTo: function () {},
-          write: console.log.bind(console)
-        }
-      }
-
-      connector.getHeader('latest')
-        .then(function (header) {
-          var bar = new ProgressBar(barFmt, {
-            total: header.height,
-            stream: stream
-          })
-
-          connector.on('newBlock', function (newBlockHash, newHeight) {
-            bar.total = newHeight
-          })
-
-          if (blockchain.latest.height !== -1) {
-            bar.tick(blockchain.latest.height)
-          }
-
-          blockchain.on('newBlock', function (newBlockHash, newHeight) {
-            bar.tick(newHeight - bar.curr)
-          })
-
-          return new Promise(function (resolve) {
-            blockchain.on('syncStop', function () {
-              if (bar.total === blockchain.latest.height) { resolve() }
-            })
-          })
-        })
-        .then(function () {
-          return blockchain.getHeader(fixtures.headers[30000].height)
-        })
-        .then(function (header) {
-          expect(header).to.deep.equal(fixtures.headers[30000])
-          return blockchain.getHeader(fixtures.headers[30000].hash)
-        })
-        .then(function (header) {
-          expect(header).to.deep.equal(fixtures.headers[30000])
-          return blockchain.getTxBlockHash(fixtures.txMerkle.confirmed[0].txid)
-        })
-        .then(function (txBlockHash) {
-          var expected = _.cloneDeep(fixtures.txMerkle.confirmed[0].result)
-          delete expected.block.index
-          delete expected.block.merkle
-          expect(txBlockHash).to.deep.equal(expected)
-          /*
-          return helpers.getUnconfirmedTxId()
-        }).then(function (txid) {
-          return blockchain.getTxBlockHash(txid)
-        })
-        .then(function (txBlockHash) {
-          expect(txBlockHash).to.deep.equal({source: 'mempool'})
-          */
-          var txid = '74335585dadf14f35eaf34ec72a134cd22bde390134e0f92cb7326f2a336b2bb'
-          return blockchain.getTxBlockHash(txid)
-            .then(function () { throw new Error('Unexpected behavior') })
-            .catch(function (err) {
-              expect(err).to.be.instanceof(blockchainjs.errors.Blockchain.TxNotFound)
-              expect(err.message).to.match(new RegExp(txid))
-            })
-        })
-        .then(done, done)
-    })
-
-    it.skip('getTx (unconfirmed)', function (done) {
-      helpers.getUnconfirmedTxId()
-        .then(function (txid) {
-          return blockchain.getTx(txid)
-            .then(function (rawTx) {
-              var responseTxId = blockchainjs.util.hashEncode(
-                blockchainjs.util.sha256x2(new Buffer(rawTx, 'hex')))
-              expect(responseTxId).to.equal(txid)
-            })
-        })
-        .then(done, done)
-    })
-
-    it.skip('sendTx', function (done) {
-      helpers.createTx()
-        .then(function (tx) {
-          return blockchain.sendTx(tx.toHex())
-        })
-        .then(done, done)
-    })
-
-    it.skip('addressesQuery (history)', function (done) {
-      var fixture = fixtures.history[0]
-      blockchain.addressesQuery(fixture.addresses)
-        .then(function (res) {
-          expect(res).to.be.an('object')
-          expect(res.transactions).to.deep.equal(fixture.transactions)
-          expect(res.latest).to.be.an('object')
-          expect(res.latest.height).to.be.at.least(480000)
-          expect(res.latest.hash).to.have.length(64)
-        })
-        .then(done, done)
-    })
-
-    /* @todo
-    it.skip('getUnspents', function (done) {
-      blockchain.getUnspents(fixtures.unspents[0].address)
-        .then(function (unspents) {
-          var expected = _.cloneDeep(fixtures.unspents[0].result)
-          expect(_.sortBy(unspents, 'txid')).to.deep.equal(_.sortBy(expected, 'txid'))
-        })
-        .then(done, done)
-    })
-    */
-
-    it.skip('subscribeAddress', function (done) {
-      new Promise(function (resolve, reject) {
-        helpers.createTx()
-          .then(function (tx) {
-            var address = bitcoin.Address.fromOutputScript(
-              tx.outs[0].script, bitcoin.networks.testnet).toBase58Check()
-
-            blockchain.on('touchAddress', function (touchedAddress, txid) {
-              if (touchedAddress === address && txid === tx.getId()) {
+            blockchain.on('syncStop', async () => {
+              let latest = await network.getHeader('latest')
+              if (blockchain.latest.hash === latest.hash) {
                 resolve()
               }
             })
-
-            return blockchain.subscribeAddress(address)
-              .then(function () {
-                return blockchain.sendTx(tx.toHex())
-              })
-          })
-          .catch(reject)
+          } catch (err) {
+            reject(err)
+          }
+        })
+        network.connect()
       })
-      .then(done, done)
+    }
+  }
+
+  let after = (opts) => {
+    return new Promise((resolve, reject) => {
+      opts.network.once('error', (err) => {
+        if (!(err instanceof blockchainjs.errors.SubscribeError)) {
+          reject(err)
+        }
+      })
+      opts.network.on('newReadyState', (newState) => {
+        if (newState === opts.network.READY_STATE.CLOSED) {
+          opts.network.removeAllListeners()
+          opts.blockchain.removeAllListeners()
+
+          opts.storage = opts.network = opts.blockchain = null
+
+          resolve()
+        }
+      })
+      opts.network.disconnect()
     })
   }
 
-  describe('full mode (memory storage)', function () {
-    this.timeout(150 * 1000)
+  let extraTests = (opts) => {
+    it('inherits Blockchain', () => {
+      expect(opts.blockchain).to.be.instanceof(blockchainjs.blockchain.Verified)
+      expect(opts.blockchain).to.be.instanceof(blockchainjs.blockchain.Blockchain)
+    })
+  }
 
-    beforeEach(createBeforeEachFunction(
+  describe('full mode, short blockchain, memory storage', () => {
+    let before = getBefore(
       blockchainjs.storage.Memory,
-      {compactMode: false},
-      {compactMode: false},
-      {fullChain: false}))
+      {compact: false},
+      {compact: false},
+      {fullChain: false})
 
-    runTests()
+    require('./implementation')({
+      before: before,
+      after: after,
+      extraTests: extraTests
+    })
   })
 
-  describe('compact mode without pre-saved data (memory storage)', function () {
-    this.timeout(150 * 1000)
-
-    beforeEach(createBeforeEachFunction(
+  describe('compact mode, short blockchain, memory storage', () => {
+    let before = getBefore(
       blockchainjs.storage.Memory,
-      {compactMode: true},
-      {compactMode: true},
-      {fullChain: false}))
+      {compact: true},
+      {compact: true},
+      {fullChain: false})
 
-    runTests()
+    require('./implementation')({
+      before: before,
+      after: after,
+      extraTests: extraTests
+    })
   })
 
-  /* @todo compact mode with pre-saved wrong hashes */
+  // TODO: compact mode with pre-saved wrong hashes
 
-  function runWithStorage (clsName) {
+  let runWithStorage = (clsName) => {
     var StorageCls = blockchainjs.storage[clsName]
     if (StorageCls === undefined) {
       return
     }
 
-    var desc = 'compact mode with pre-saved data (' + clsName + ' storage)'
     var ldescribe = StorageCls.isAvailable() ? describe : xdescribe
-    ldescribe(desc, function () {
-      this.timeout(60 * 1000)
-
-      beforeEach(createBeforeEachFunction(
+    ldescribe(`compact mode, pre-saved chunk hashes, ${clsName} storage`, () => {
+      let before = getBefore(
         StorageCls,
         {
-          compactMode: true,
+          compact: true,
           filename: ':memory:',
-          prefix: crypto.pseudoRandomBytes(10).toString('hex'),
-          dbName: crypto.pseudoRandomBytes(10).toString('hex')
+          prefix: getRandomBytes(10).toString('hex'),
+          dbName: getRandomBytes(10).toString('hex')
         },
         {
-          compactMode: true,
+          compact: true,
           chunkHashes: blockchainjs.chunkHashes.testnet
         },
-        {fullChain: true}))
+        {fullChain: true})
 
-      runTests()
+      require('./implementation')({
+        before: before,
+        after: after,
+        extraTests: extraTests
+      })
     })
   }
 

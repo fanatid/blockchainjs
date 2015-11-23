@@ -52,7 +52,7 @@
   "dependencies": {
     "babel-runtime": "^5.8.29",
     "bitcoin-proof": "^1.0.0",
-    "bitcoin-spv-utils": "^0.1.2",
+    "bitcoin-spv-utils": "^0.1.4",
     "browser-request": "=0.3.3",
     "core-decorators": "^0.8.1",
     "error-system": "^1.0.0",
@@ -103,6 +103,8 @@
     "globals": [
       "describe",
       "xdescribe",
+      "before",
+      "after",
       "beforeEach",
       "afterEach",
       "it"

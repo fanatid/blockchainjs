@@ -1,12 +1,8 @@
-import { randomBytes as getRandomBytes } from 'crypto'
-
-import runImplementationTest from './implementation'
-
-runImplementationTest({
+require('./implementation')({
   describe: describe,
   clsName: 'IndexedDB',
   clsOpts: {
-    dbName: getRandomBytes(10).toString('hex')
+    dbName: require('crypto').randomBytes(10).toString('hex')
   },
   skipFullMode: false
 })

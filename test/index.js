@@ -4,8 +4,17 @@ if (global.__env__) {
   process.env.CHROMANODE_URL = global.__env__.CHROMANODE_URL
 }
 
-process.on('unhandledRejection', (reason) => {
-  console.log(reason && reason.stack || reason)
+let errors = require('../src').errors
+process.on('unhandledRejection', (err) => {
+  let msg = (err && err.stack || err).toString()
+
+  if (err instanceof errors.Network.Chromanode.Fail ||
+      err instanceof errors.Network.SubscribeError) {
+    console.error(msg.split('\n')[0])
+    return
+  }
+
+  console.log(msg)
 })
 
 describe('blockchainjs', () => {
@@ -24,5 +33,5 @@ describe('blockchainjs', () => {
   // blockchain
   require('./blockchain/blockchain')
   require('./blockchain/naive')
-  // require('./blockchain/verified')
+  require('./blockchain/verified')
 })

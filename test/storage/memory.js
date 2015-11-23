@@ -1,6 +1,4 @@
-import runImplementationTest from './implementation'
-
-runImplementationTest({
+require('./implementation')({
   describe: describe,
   clsName: 'Memory',
   clsOpts: {},

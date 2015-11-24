@@ -419,7 +419,7 @@ export default class Chromanode extends Network {
   /**
    * @param {Object} opts
    * @param {string} opts.event newBlock or newTx
-   * @param {string[]} [opts.addresses]
+   * @param {string} [opts.address]
    * @return {Promise}
    */
   @makeConcurrent({concurrency: 1})
